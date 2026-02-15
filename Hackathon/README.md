@@ -11,6 +11,7 @@ A hackathon-ready webapp for the **Siren's Call** track: analyzing text for misi
 - **Social engineering detector** – Phishing/scam patterns (urgency, authority, credentials)
 - **AI-generated detector** – Heuristics for AI-like text (repetition, generic phrases)
 - **Fact-check metrics** – Correct count, incorrect count, and confidence in the response
+- **Backboard** – Optional claim verification via Backboard API when `BACKBOARD_API_KEY` is set; falls back to DuckDuckGo then local RAG.
 
 ## Install & Run
 
@@ -24,6 +25,19 @@ Or simply `streamlit run app.py` (you may be prompted for email—leave blank to
 The app will open in your browser at `http://localhost:8501`.
 
 **Note:** The first run may take 1–2 minutes while the embedding model (`all-MiniLM-L6-v2`) downloads. Subsequent runs are faster.
+
+### Optional: API keys (.env)
+
+Create a `.env` file in the `Hackathon` folder (copy from `.env.example`) and add any keys you use:
+
+```bash
+cp .env.example .env
+# Edit .env and set:
+# BACKBOARD_API_KEY=your_backboard_key   # for claim verification in Analyzer
+# GEMINI_API_KEY=your_gemini_key         # for Gemini-based verification
+```
+
+The app loads `.env` at startup, so **Backboard** (claim verification) and **Gemini** features will use these keys. Do not commit `.env`.
 
 ## Web Verification (default, no toggle)
 
@@ -66,6 +80,8 @@ Use the sidebar buttons to load examples:
     ├── ai_text_detector.py
     ├── web_verifier.py    # DuckDuckGo web search (default)
     ├── rag_verifier.py    # Local RAG (fallback)
+    ├── backboard_client.py   # Backboard API (fact-check assistant)
+    ├── backboard_verifier.py  # Claim verification via Backboard
     ├── scoring.py
     ├── utils.py
     └── kb/

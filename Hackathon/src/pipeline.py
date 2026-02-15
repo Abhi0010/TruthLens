@@ -13,6 +13,9 @@ from .social_engineering_detector import RiskLevel, SocialEngineeringResult, det
 from .utils import is_empty_input
 from .web_verifier import WebVerifier
 
+from .backboard_client import is_configured as backboard_configured
+from .backboard_verifier import BackboardVerifier
+
 
 @dataclass
 class PipelineResult:
@@ -33,7 +36,7 @@ class PipelineResult:
     ai_detection: AIDetectionResult = field(default_factory=lambda: AIDetectionResult(0.0, []))
     evidence_passages: List[Dict[str, Any]] = field(default_factory=list)
     raw_text: str = ""
-    verification_mode: str = "offline"  # "offline" or "web"
+    verification_mode: str = "offline"  # "offline", "web", or "backboard"
 
 
 def run_pipeline(
@@ -58,20 +61,29 @@ def run_pipeline(
     # 1. Claim extraction
     claims_raw = extract_claims(text)
 
-    # 2. Claim verification — use internet (DuckDuckGo) first; fallback to RAG only if web fails
+    # 2. Claim verification — Backboard if configured, else DuckDuckGo, else RAG
     verdicts: List[VerdictResult] = []
-    for attempt in range(2):  # retry once before falling back to RAG
-        try:
-            web_verifier = WebVerifier(max_results_per_claim=8)
-            verdicts = web_verifier.verify_claims(claims_raw) if claims_raw else []
-            result.verification_mode = "web"
-            break
-        except Exception:
-            if attempt == 1:
-                verifier = rag_verifier or RAGVerifier()
-                verdicts = verifier.verify_claims(claims_raw) if claims_raw else []
-                result.verification_mode = "offline"
-            continue
+    if claims_raw:
+        if backboard_configured() and BackboardVerifier is not None:
+            try:
+                backboard_verifier = BackboardVerifier()
+                verdicts = backboard_verifier.verify_claims(claims_raw)
+                result.verification_mode = "backboard"
+            except Exception:
+                pass
+        if not verdicts:
+            for attempt in range(2):
+                try:
+                    web_verifier = WebVerifier(max_results_per_claim=8)
+                    verdicts = web_verifier.verify_claims(claims_raw)
+                    result.verification_mode = "web"
+                    break
+                except Exception:
+                    if attempt == 1:
+                        verifier = rag_verifier or RAGVerifier()
+                        verdicts = verifier.verify_claims(claims_raw)
+                        result.verification_mode = "offline"
+                    continue
 
     # Convert to ClaimVerdict for scoring
     result.claims = [

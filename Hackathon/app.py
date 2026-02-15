@@ -3,8 +3,11 @@
 import sys
 from pathlib import Path
 
-# Ensure src is on path
+# Ensure src is on path and load .env before any code reads env vars
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 import random
 import time
@@ -190,6 +193,7 @@ st.markdown("""
     .risk-low { color: #22c55e; }
     .web-badge { display: inline-block; background: #166534; color: white; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; margin-left: 6px; }
     .offline-badge { display: inline-block; background: #854d0e; color: white; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; margin-left: 6px; }
+    .backboard-badge { display: inline-block; background: #1e40af; color: white; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; margin-left: 6px; }
     .trainer-message-card {
         background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
         border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1rem;
@@ -400,7 +404,8 @@ else:
     # Analyzer / Trainer section switcher (persists across reruns so clicking a section always works)
     SECTION_OPTIONS = ["🔍 Analyzer", "🎯 Trainer"]
     if "main_section" not in st.session_state or st.session_state.main_section not in SECTION_OPTIONS:
-        st.session_state.main_section = SECTION_OPTIONS[0] if st.session_state.active_tab == "analyzer" else SECTION_OPTIONS[1]
+        tab = st.session_state.active_tab
+        st.session_state.main_section = SECTION_OPTIONS[0] if tab == "analyzer" else SECTION_OPTIONS[1]
     choice = st.radio(
         "Section",
         SECTION_OPTIONS,
@@ -443,11 +448,16 @@ else:
         if st.session_state.last_result is not None:
             result = st.session_state.last_result
             vmode = result.get("verification_mode", "offline")
-            mode_badge = '<span class="web-badge">WEB</span>' if vmode == "web" else '<span class="offline-badge">OFFLINE</span>'
+            if vmode == "backboard":
+                mode_badge = '<span class="backboard-badge">BACKBOARD</span>'
+            elif vmode == "web":
+                mode_badge = '<span class="web-badge">WEB</span>'
+            else:
+                mode_badge = '<span class="offline-badge">OFFLINE</span>'
             col1, col2 = st.columns(2)
             with col1:
                 summary = result.get("fact_check_summary", "No claims to verify")
-                source_note = "Using internet (DuckDuckGo)" if vmode == "web" else "No internet — local KB only (limited)"
+                source_note = "Using Backboard" if vmode == "backboard" else "Using internet (DuckDuckGo)" if vmode == "web" else "No internet — local KB only (limited)"
                 st.markdown(
                     f'<div class="trust-card"><div>Fact check {mode_badge}</div>'
                     f'<div class="metric-big" style="font-size: 1.5rem;">{summary}</div>'
@@ -466,7 +476,7 @@ else:
                 st.subheader("Quick Check Summary")
                 st.write(f"**Fact check:** {result.get('fact_check_summary', 'No claims to verify')}")
                 st.write(f"**Confidence in response:** {result['response_confidence']*100:.0f}%")
-                st.write(f"**Fact checker source:** {'Using internet (DuckDuckGo web search)' if vmode == 'web' else 'No internet — local knowledge base only (results may be limited)'}")
+                st.write(f"**Fact checker source:** {'Using Backboard' if vmode == 'backboard' else 'Using internet (DuckDuckGo web search)' if vmode == 'web' else 'No internet — local knowledge base only (results may be limited)'}")
                 st.write("**Top reasons:**")
                 for r in result["top_reasons"]:
                     st.write(f"- {r}")
@@ -514,7 +524,7 @@ else:
                     st.write(f"- {i}")
             with tab5:
                 st.subheader("Retrieved Evidence")
-                st.caption("Sources from DuckDuckGo web search" if vmode == "web" else "Sources from local knowledge base")
+                st.caption("Sources from Backboard" if vmode == "backboard" else "Sources from DuckDuckGo web search" if vmode == "web" else "Sources from local knowledge base")
                 if result["evidence_passages"]:
                     seen = set()
                     for ep in result["evidence_passages"][:20]:

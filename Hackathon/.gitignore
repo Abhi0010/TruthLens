@@ -1,0 +1,5 @@
+# Local env file with API keys — do not commit
+.env
+pycache/
+__pycache__/
+.DS_Store
