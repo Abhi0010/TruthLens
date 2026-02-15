@@ -1,0 +1,17 @@
+# Local env / secrets
+.env
+*.env.local
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.py[cod]
+
+# Streamlit
+.streamlit/
+
+# OS
+.DS_Store
+Thumbs.db
