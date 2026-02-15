@@ -62,35 +62,34 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Section-specific titles and descriptions
-SECTION_CONTENT = {
-    "normal_news": {
-        "title": "🔍 Normal News",
-        "description": "Extract factual claims and verify them against web sources or our knowledge base.",
-    },
-    "scam_phishing": {
-        "title": "🛡️ Scam & Phishing Analysis",
-        "description": "Detect social engineering, urgency tactics, and red flags in emails and messages.",
-    },
-    "fact_check": {
+# Single source of truth for modes: Analyzer section + Trainer quiz type
+# Add or reorder entries here; home cards, sidebar, and Analyzer/Trainer stay in sync
+SECTIONS = [
+    {
+        "id": "fact_check",
         "title": "📊 Fact Check",
         "description": "See how many claims are correct vs incorrect and how confident we are in the response.",
+        "sample_label": "Fact Check",
+        "quiz_type": "misinformation",
     },
-}
-
-# Sidebar sample label -> suggested quiz type for Trainer
-QUICK_LOAD_TO_QUIZ = {
-    "Fact Check": "misinformation",
-    "Phishing scams": "phishing_crypto",
-    "Normal news": "normal_news",
-}
-# Sidebar sample label -> section key (so Analyzer title/description match the loaded sample)
-QUICK_LOAD_TO_SECTION = {
-    "Fact Check": "fact_check",
-    "Phishing scams": "scam_phishing",
-    "Normal news": "normal_news",  
-
-}
+    {
+        "id": "scam_phishing",
+        "title": "🛡️ Scam & Phishing",
+        "description": "Detect social engineering, urgency tactics, and red flags in emails and messages.",
+        "sample_label": "Phishing scams",
+        "quiz_type": "phishing_crypto",
+    },
+    {
+        "id": "normal_news",
+        "title": "📰 Normal News",
+        "description": "Extract factual claims and check them against web sources or our knowledge base.",
+        "sample_label": "Normal news",
+        "quiz_type": "normal_news",
+    },
+]
+SECTION_CONTENT = {s["id"]: {"title": s["title"], "description": s["description"]} for s in SECTIONS}
+QUICK_LOAD_TO_QUIZ = {s["sample_label"]: s["quiz_type"] for s in SECTIONS}
+QUICK_LOAD_TO_SECTION = {s["sample_label"]: s["id"] for s in SECTIONS}
 
 # Session state
 if "show_analyze" not in st.session_state:
@@ -668,10 +667,12 @@ def _message_with_highlights(message: str, highlights: list) -> str:
 
 def _render_trainer():
     """Render the Trainer tab: quiz flow, feedback, Review Mistakes, and friend progress."""
-    quiz_type = st.session_state.suggested_quiz_type
+    # Use selected_section as source of truth so switching section in sidebar (including while in Trainer) works
+    _sec_id = st.session_state.get("selected_section", "fact_check")
+    quiz_type = next((s["quiz_type"] for s in SECTIONS if s["id"] == _sec_id), "misinformation")
     if not st.session_state.quiz_initialized or st.session_state.quiz_type != quiz_type:
         _init_quiz(quiz_type)
-        st.rerun()
+        # No st.rerun() here so section switch from sidebar is not lost; we render with new state this run
 
     rounds = st.session_state.rounds
     current = st.session_state.current_round
@@ -686,7 +687,7 @@ def _render_trainer():
         <div class="trainer-intro-strip">
             <span>📩 Read the message</span>
             <span>•</span>
-            <span>🎯 Pick the main tactic</span>
+            <span>🎯 Pick the best response</span>
             <span>•</span>
             <span>📖 Get feedback & review mistakes</span>
         </div>
@@ -733,7 +734,6 @@ def _render_trainer():
 
     round_data = rounds[current]
     message = round_data["message"]
-    highlights = round_data.get("highlights", [])
     correct_tactic = round_data["correct_tactic"]
     wrong_tactics = list(round_data.get("wrong_tactics", []))
     all_tactics = [correct_tactic] + wrong_tactics
@@ -755,7 +755,7 @@ def _render_trainer():
             unsafe_allow_html=True,
         )
     with col_right:
-        st.caption("Choose the main tactic:")
+        st.caption("What should you do?")
         selected = None
         if not st.session_state.reveal:
             # Tactic options as buttons (like the design)
@@ -819,12 +819,15 @@ with st.sidebar:
             '</div>',
             unsafe_allow_html=True,
         )
-        for label in SAMPLE_INPUTS:
+        for sec in SECTIONS:
+            label = sec["sample_label"]
             if st.button(label, use_container_width=True, key=f"sample_{hash(label)}"):
-                # Don't pre-fill input — keep text area blank; Try Samples only sets section/quiz
                 st.session_state.last_result = None
-                st.session_state.suggested_quiz_type = QUICK_LOAD_TO_QUIZ.get(label, "misinformation")
-                st.session_state.selected_section = QUICK_LOAD_TO_SECTION.get(label, "fact_check")
+                st.session_state.suggested_quiz_type = sec["quiz_type"]
+                st.session_state.selected_section = sec["id"]
+                # Switch to Analyzer when changing section (so Trainer → section change shows Analyzer first)
+                st.session_state.active_tab = "analyzer"
+                st.session_state.main_section = "🔍 Analyzer"
                 st.rerun()
         st.divider()
         if st.button("← Back to Home", use_container_width=True, key="back_home"):
@@ -854,18 +857,12 @@ with st.sidebar:
         )
         st.markdown('<div class="sidebar-section-label">Get started</div>', unsafe_allow_html=True)
         st.caption("Choose a mode below to analyze text, fact-check claims, or practice spotting scams.")
-        if st.button("📊 Fact Check", use_container_width=True, key="sidebar_fact_check"):
-            st.session_state.show_analyze = True
-            st.session_state.selected_section = "fact_check"
-            st.rerun()
-        if st.button("🛡️ Scam & Phishing", use_container_width=True, key="sidebar_scam"):
-            st.session_state.show_analyze = True
-            st.session_state.selected_section = "scam_phishing"
-            st.rerun()
-        if st.button("📰 Normal News", use_container_width=True, key="sidebar_normal"):
-            st.session_state.show_analyze = True
-            st.session_state.selected_section = "normal_news"
-            st.rerun()
+        for sec in SECTIONS:
+            if st.button(sec["title"], use_container_width=True, key=f"sidebar_{sec['id']}"):
+                st.session_state.show_analyze = True
+                st.session_state.selected_section = sec["id"]
+                st.session_state.suggested_quiz_type = sec["quiz_type"]
+                st.rerun()
         st.markdown(
             '<div class="sidebar-trust-badge">'
             '<strong>✓</strong> Backed by Backboard • Web & knowledge base verification'
@@ -893,22 +890,15 @@ if not st.session_state.show_analyze:
     <div class="section-title-home">What we do</div>
     <div class="section-intro-home">Pick a mode to analyze pasted text or practice with our quiz.</div>
     """, unsafe_allow_html=True)
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("📊 **Fact Check**\n\nSee how many claims are correct vs incorrect and how confident we are in the response.", key="card1", use_container_width=True):
-            st.session_state.show_analyze = True
-            st.session_state.selected_section = "fact_check"
-            st.rerun()
-    with col2:
-        if st.button("🛡️ **Scam & Phishing**\n\nDetect social engineering, urgency tactics, and red flags in emails and messages.", key="card2", use_container_width=True):
-            st.session_state.show_analyze = True
-            st.session_state.selected_section = "scam_phishing"
-            st.rerun()
-    with col3:
-        if st.button("📰 **Normal News**\n\nExtract factual claims and check them against web sources or our knowledge base.", key="card3", use_container_width=True):
-            st.session_state.show_analyze = True
-            st.session_state.selected_section = "normal_news"
-            st.rerun()
+    cols = st.columns(len(SECTIONS))
+    for i, sec in enumerate(SECTIONS):
+        with cols[i]:
+            btn_text = f"{sec['title']}\n\n{sec['description']}"
+            if st.button(btn_text, key=f"card_{sec['id']}", use_container_width=True):
+                st.session_state.show_analyze = True
+                st.session_state.selected_section = sec["id"]
+                st.session_state.suggested_quiz_type = sec["quiz_type"]
+                st.rerun()
     st.markdown("""
     <div class="home-footer">
         <strong>Siren's Call Track</strong> • Hackathon — Built to help you verify information and stay safe online.
@@ -951,12 +941,11 @@ else:
         </div>
         """, unsafe_allow_html=True)
         # Try a sample: only show the sample that matches the current mode
-        _section_to_sample = {
-            "fact_check": ("Fact Check", "Load Fact Check sample"),
-            "scam_phishing": ("Phishing scams", "Load Phishing sample"),
-            "normal_news": ("Normal news", "Load Normal news sample"),
-        }
-        _sample_key, _sample_label = _section_to_sample.get(st.session_state.selected_section, ("Fact Check", "Load Fact Check sample"))
+        _section_to_sample = {s["id"]: (s["sample_label"], f"Load {s['sample_label']} sample") for s in SECTIONS}
+        _sample_key, _sample_label = _section_to_sample.get(
+            st.session_state.selected_section,
+            (SECTIONS[0]["sample_label"], f"Load {SECTIONS[0]['sample_label']} sample"),
+        )
         with st.expander("💡 Try a sample", expanded=False):
             st.caption("Load sample text into the box below to run a quick analysis.")
             if st.button(_sample_label, key="sample_analyzer_current", use_container_width=True):
