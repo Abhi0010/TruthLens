@@ -1110,11 +1110,6 @@ else:
             <span>•</span>
             <span>🛡️ Scam & AI detection</span>
         </div>
-        <div class="analyzer-steps">
-            <span class="step"><span class="step-num">1</span> Paste your text below</span>
-            <span class="step"><span class="step-num">2</span> Click Analyze</span>
-            <span class="step"><span class="step-num">3</span> See verdict, evidence & red flags</span>
-        </div>
         """, unsafe_allow_html=True)
         # Try a sample: only show the sample that matches the current mode; randomize from corpus
         _section_to_sample = {
