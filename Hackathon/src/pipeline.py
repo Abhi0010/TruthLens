@@ -1,4 +1,4 @@
-"""Main orchestration pipeline for TruthLens Suite."""
+"""Main orchestration pipeline for Clarion."""
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -19,7 +19,7 @@ from .backboard_verifier import BackboardVerifier
 
 @dataclass
 class PipelineResult:
-    """Unified result from the TruthLens pipeline."""
+    """Unified result from the Clarion pipeline."""
 
     correct_count: int = 0
     incorrect_count: int = 0
@@ -36,7 +36,8 @@ class PipelineResult:
     ai_detection: AIDetectionResult = field(default_factory=lambda: AIDetectionResult(0.0, []))
     evidence_passages: List[Dict[str, Any]] = field(default_factory=list)
     raw_text: str = ""
-    verification_mode: str = "offline"  # "offline", "web", or "backboard"
+    verification_mode: str = "offline"  # "offline", "web", "backboard", or "web+backboard"
+    citations: List[str] = field(default_factory=list)  # Aggregated URLs from evidence
 
 
 def run_pipeline(
@@ -45,7 +46,7 @@ def run_pipeline(
     rag_verifier: Optional[RAGVerifier] = None,
 ) -> PipelineResult:
     """
-    Run the full TruthLens pipeline on input text.
+    Run the full Clarion pipeline on input text.
     Uses Web Verify (DuckDuckGo) by default for claim verification (normal news and misinformation).
     Falls back to offline RAG if web verification fails.
     """
@@ -61,36 +62,80 @@ def run_pipeline(
     # 1. Claim extraction
     claims_raw = extract_claims(text)
 
-    # Normalize: treat claim_verification like fact_check (DuckDuckGo-first path)
     is_phishing = content_type == "scam_phishing"
-    is_normal_or_fact_check = content_type in ("normal_news", "fact_check", "claim_verification") or content_type not in ("scam_phishing",)
+    is_fact_check_only = content_type == "fact_check"
+    is_normal_news = content_type == "normal_news"
 
-    # 2. Claim verification — Phishing: Backboard first then DuckDuckGo/RAG; Normal/Fact-check: DuckDuckGo first then Backboard/RAG
+    def _extract_citations(verdicts_list: List[VerdictResult]) -> List[str]:
+        """Extract unique URLs from evidence for citations."""
+        import re
+        seen: set = set()
+        urls: List[str] = []
+        for v in verdicts_list:
+            for ev in (v.evidence or []):
+                # Match URLs in evidence (e.g. "Source: https://...")
+                for match in re.finditer(r"https?://[^\s\)\]\"\']+", ev):
+                    u = match.group(0).rstrip(".,;:)")
+                    if u not in seen:
+                        seen.add(u)
+                        urls.append(u)
+        return urls[:20]  # Limit to 20 citations
+
+    # 2. Claim verification
+    # Fact checker: Backboard only
+    # Normal news: DuckDuckGo first → Backboard synthesis (finalize)
+    # Scam/phishing: Backboard first, fallback DuckDuckGo/RAG
+    # Other: DuckDuckGo first, fallback Backboard/RAG
     verdicts: List[VerdictResult] = []
     if claims_raw:
-        if is_phishing and backboard_configured() and BackboardVerifier is not None:
+        if is_fact_check_only and backboard_configured() and BackboardVerifier is not None:
             try:
                 backboard_verifier = BackboardVerifier()
                 verdicts = backboard_verifier.verify_claims(claims_raw)
                 result.verification_mode = "backboard"
+                result.citations = _extract_citations(verdicts)
             except Exception:
                 pass
-        if not verdicts:
+        elif is_normal_news:
+            # Normal news: DuckDuckGo first, then Backboard synthesis
             for attempt in range(2):
                 try:
                     web_verifier = WebVerifier(max_results_per_claim=8)
                     verdicts = web_verifier.verify_claims(claims_raw)
-                    result.verification_mode = "web"
+                    result.verification_mode = "web"  # Will become "web+backboard" after synthesis
+                    result.citations = _extract_citations(verdicts)
                     break
                 except Exception:
                     if attempt == 1:
                         verdicts = []
                     continue
-        if not verdicts and backboard_configured() and BackboardVerifier is not None and is_normal_or_fact_check:
+        elif is_phishing and backboard_configured() and BackboardVerifier is not None:
             try:
                 backboard_verifier = BackboardVerifier()
                 verdicts = backboard_verifier.verify_claims(claims_raw)
                 result.verification_mode = "backboard"
+                result.citations = _extract_citations(verdicts)
+            except Exception:
+                pass
+        if not verdicts and not is_fact_check_only:
+            # Fact checker uses Backboard only; skip DuckDuckGo fallback
+            for attempt in range(2):
+                try:
+                    web_verifier = WebVerifier(max_results_per_claim=8)
+                    verdicts = web_verifier.verify_claims(claims_raw)
+                    result.verification_mode = "web"
+                    result.citations = _extract_citations(verdicts)
+                    break
+                except Exception:
+                    if attempt == 1:
+                        verdicts = []
+                    continue
+        if not verdicts and backboard_configured() and BackboardVerifier is not None and not is_fact_check_only:
+            try:
+                backboard_verifier = BackboardVerifier()
+                verdicts = backboard_verifier.verify_claims(claims_raw)
+                result.verification_mode = "backboard"
+                result.citations = _extract_citations(verdicts)
             except Exception:
                 pass
         if not verdicts:
@@ -98,6 +143,7 @@ def run_pipeline(
                 verifier = rag_verifier or RAGVerifier()
                 verdicts = verifier.verify_claims(claims_raw)
                 result.verification_mode = "offline"
+                result.citations = _extract_citations(verdicts)
             except Exception:
                 pass
 
@@ -122,12 +168,12 @@ def run_pipeline(
                 "verdict": v.verdict,
             })
 
-    # 2b. For normal/fact-check when web succeeded, one Backboard synthesis (summary + reasons)
+    # 2b. For normal_news when web succeeded: Backboard synthesis to finalize (summary + reasons + citations)
     synthesis_result: Optional[Dict[str, Any]] = None
     if (
         verdicts
         and result.verification_mode == "web"
-        and is_normal_or_fact_check
+        and is_normal_news
         and backboard_configured()
     ):
         try:
@@ -136,6 +182,13 @@ def run_pipeline(
                 for v in verdicts
             ]
             synthesis_result = synthesize_fact_check(payload)
+            if synthesis_result:
+                result.verification_mode = "web+backboard"
+                syn_cites = synthesis_result.get("citations", [])
+                existing = set(result.citations)
+                for c in syn_cites:
+                    if c and c not in existing:
+                        result.citations.append(c)
         except Exception:
             pass
 
@@ -152,11 +205,9 @@ def run_pipeline(
     result.correct_count, result.incorrect_count, result.response_confidence, result.top_reasons, result.fact_check_summary = compute_fact_check_metrics(
         claim_verdicts=result.claims,
     )
-    # Overwrite summary and reasons with Backboard synthesis when available
-    if synthesis_result:
-        if synthesis_result.get("fact_check_summary"):
-            result.fact_check_summary = synthesis_result["fact_check_summary"]
-        if synthesis_result.get("top_reasons"):
-            result.top_reasons = synthesis_result["top_reasons"]
+    # Overwrite summary with Backboard synthesis when available; keep top_reasons from
+    # compute_fact_check_metrics so they always include the actual claims.
+    if synthesis_result and synthesis_result.get("fact_check_summary"):
+        result.fact_check_summary = synthesis_result["fact_check_summary"]
 
     return result

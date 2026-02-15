@@ -1,4 +1,4 @@
-# TruthLens Knowledge Base - Common Misinformation & Scam Topics
+# Clarion Knowledge Base - Common Misinformation & Scam Topics
 
 ## Vaccines
 

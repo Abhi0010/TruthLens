@@ -1,4 +1,4 @@
-"""Text preprocessing for TruthLens Suite."""
+"""Text preprocessing for Clarion."""
 
 import re
 from typing import List, Optional

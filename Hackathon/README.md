@@ -1,4 +1,4 @@
-# TruthLens Suite
+# Clarion
 
 A hackathon-ready webapp for the **Siren's Call** track: analyzing text for misinformation, social engineering, and deceptive AI.
 

@@ -1,4 +1,4 @@
-"""Utility functions for TruthLens Suite."""
+"""Utility functions for Clarion."""
 
 from pathlib import Path
 from typing import Any, Optional

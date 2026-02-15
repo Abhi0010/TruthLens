@@ -1,1 +1,1 @@
-"""TruthLens Suite - Misinformation & manipulation analysis."""
+"""Clarion - Misinformation & manipulation analysis."""

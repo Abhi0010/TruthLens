@@ -4,6 +4,12 @@ from dataclasses import dataclass
 from typing import List
 
 
+def _truncate(s: str, max_len: int) -> str:
+    """Truncate string with ellipsis if over max_len."""
+    s = (s or "").strip()
+    return (s[: max_len - 3] + "...") if len(s) > max_len else s
+
+
 @dataclass
 class ClaimVerdict:
     """Verdict for a single claim."""
@@ -38,11 +44,17 @@ def compute_fact_check_metrics(
         unknown = sum(1 for c in claim_verdicts if c.verdict == "Unknown")
         misclassification = sum(1 for c in claim_verdicts if c.verdict == "Misclassification")
         if correct_count > 0:
-            reasons.append(f"{correct_count} claim(s) correct (supported by evidence)")
+            correct_claims = [c.claim for c in claim_verdicts if c.verdict == "Supported"]
+            claim_text = "; ".join(f'"{_truncate(c, 80)}"' for c in correct_claims)
+            reasons.append(f"{correct_count} claim(s) correct (supported by evidence): {claim_text}")
         if incorrect_count > 0:
-            reasons.append(f"{incorrect_count} claim(s) incorrect (refuted by evidence)")
+            incorrect_claims = [c.claim for c in claim_verdicts if c.verdict == "Refuted"]
+            claim_text = "; ".join(f'"{_truncate(c, 80)}"' for c in incorrect_claims)
+            reasons.append(f"{incorrect_count} claim(s) not supported by evidence: {claim_text}")
         if misclassification > 0:
-            reasons.append(f"{misclassification} claim(s) misclassified (off-topic/wrong category)")
+            misc_claims = [c.claim for c in claim_verdicts if c.verdict == "Misclassification"]
+            claim_text = "; ".join(f'"{_truncate(c, 80)}"' for c in misc_claims)
+            reasons.append(f"{misclassification} claim(s) misclassified (off-topic/wrong category): {claim_text}")
         if unknown == total_claims and total_claims > 0:
             reasons.append("Claims not in knowledge base (unverifiable)")
     if not reasons:
