@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 import random
+import threading
 import time
 
 import streamlit as st
@@ -52,6 +53,19 @@ def run_analysis(text: str, content_type: str, _v: int = 5) -> dict:
         "verification_mode": result.verification_mode,
         "citations": result.citations,
     }
+
+
+def _run_analysis_in_thread(text: str, content_type: str) -> dict:
+    """Run analysis in a thread so Streamlit's 'Running' UI shows join() not run_analysis()."""
+    result_holder = {}
+
+    def _run():
+        result_holder["result"] = run_analysis(text, content_type)
+
+    thread = threading.Thread(target=_run)
+    thread.start()
+    thread.join()
+    return result_holder["result"]
 
 
 # Page config - must be first Streamlit command
@@ -128,24 +142,167 @@ if "source_url" not in st.session_state:
 if "source_label" not in st.session_state:
     st.session_state.source_label = ""
 
-SAMPLE_INPUTS = {
-    "Fact Check": (
-        "BREAKING: They don't want you to know the truth! SHARE THIS NOW!!! "
-        "100% proven. Mainstream media is hiding what really happened. "
-        "Tell everyone before it's too late.",
-        "Tweet",
-    ),
-    "Phishing scams": (
-        "Dear Customer, Your bank account has been suspended. Act within 24 hours "
-        "to verify your identity or lose access. Click here: https://fake-bank-secure.com/verify. "
-        "URGENT! You've won 5 Bitcoin! Send 0.1 BTC to verify. Act now!!!",
-        "Email",
-    ),
-    "Normal news": (
-        "The Federal Reserve announced a 0.25% interest rate hike today. "
-        "Markets reacted with modest gains. Economists had expected the move.",
-        "Normal news",
-    ),
+# Corpus: 10 samples per category. Each entry is (text, type_label).
+# Fact Check: clear misinformation (conspiracy, viral) vs verifiable factual claims (named sources).
+# Phishing: strong red flags (urgency, credentials, fake links, too-good-to-be-true).
+# Normal news: neutral, factual, verifiable claims with institutions/dates.
+SAMPLE_INPUTS: dict[str, list[tuple[str, str]]] = {
+    "Fact Check": [
+        (
+            "BREAKING: They don't want you to know the truth! SHARE THIS NOW!!! "
+            "100% proven. Mainstream media is hiding what really happened. Tell everyone before it's too late.",
+            "Tweet",
+        ),
+        (
+            "Scientists have FINALLY admitted that vaccines cause autism. The study was suppressed for years. "
+            "Share with every parent you know. Big Pharma doesn't want you to see this.",
+            "Social post",
+        ),
+        (
+            "The 1969 moon landing was faked in a Hollywood studio. NASA has never sent humans to the moon. "
+            "All the evidence points to a government cover-up. Do your own research.",
+            "Forum post",
+        ),
+        (
+            "According to the CDC, flu hospitalizations rose 15% this season compared to last year. "
+            "Health officials recommend getting the flu shot and washing hands frequently. The data was released in the agency's weekly FluView report.",
+            "News-style",
+        ),
+        (
+            "The election was stolen. Millions of fraudulent votes were counted. Everyone knows it. "
+            "We need to fight for our country before it's too late!!!",
+            "Tweet",
+        ),
+        (
+            "A study from MIT found that moderate coffee consumption is associated with lower risk of heart disease. "
+            "Researchers followed 200,000 participants over 10 years. Results were published in the Journal of the American Medical Association in 2022.",
+            "News-style",
+        ),
+        (
+            "Chemicals in the water supply are turning frogs into hermaphrodites. This is documented science. "
+            "The elite don't want you to know. Do your own research.",
+            "Social post",
+        ),
+        (
+            "U.S. GDP grew 2.8% in the third quarter of 2024, according to the Bureau of Economic Analysis. "
+            "Unemployment held at 3.7%. Federal Reserve officials said they will monitor inflation data before the next rate decision.",
+            "News-style",
+        ),
+        (
+            "COVID-19 was created in a Chinese lab and released on purpose. Dr. Fauci knew and funded it. It's all in the emails. "
+            "Wake up. They're coming for your freedom next.",
+            "Tweet",
+        ),
+        (
+            "The Springfield Food Bank reported a 20% increase in demand this winter. Volunteers are needed. "
+            "Donations can be dropped at 123 Main St. The organization has been serving the community since 1985, according to its annual report.",
+            "Community update",
+        ),
+    ],
+    "Phishing scams": [
+        (
+            "URGENT - Your bank account has been suspended. You must verify your identity within 24 hours or lose access permanently. "
+            "Click here now: https://secure-bank-verify.com/confirm. Do not delay. We have already flagged your account.",
+            "Email",
+        ),
+        (
+            "Microsoft Security Alert: We detected someone trying to sign in to your account from an unknown device. "
+            "Call 1-800-XXX-XXXX within 2 hours to avoid permanent lockout. Do not use the website - call only. Your account will be disabled if you ignore this.",
+            "Tech support scam",
+        ),
+        (
+            "Your package is held at customs. Pay a release fee of $2.99 now: [click here]. "
+            "Parcel will be destroyed in 48 hours. We tried to deliver but you were not home. Act immediately.",
+            "Delivery scam",
+        ),
+        (
+            "CONGRATULATIONS! You have been chosen for a $500 Walmart gift card. Click to claim - offer expires in 2 hours. "
+            "Enter your card number to verify you are a real person. No purchase necessary. Limited to first 100 respondents.",
+            "Prize scam",
+        ),
+        (
+            "Your Netflix payment failed. We will cancel your subscription in 24 hours. Update your payment method here: [link]. "
+            "Do not reply to this email. If you do not update now, you will lose access to all content.",
+            "Subscription phishing",
+        ),
+        (
+            "I am a senior official and need to move $18.5 million out of my country. You will receive 30% ($5.55M) for helping. "
+            "Reply with your full name, bank name, account number, and routing number. This is confidential. Time is very limited.",
+            "Advance-fee",
+        ),
+        (
+            "IRS Final Notice: You have an unpaid tax balance of $3,247. Pay immediately via this secure portal to avoid arrest and asset seizure. "
+            "Do not contact your accountant. You have 72 hours. Click here to pay now.",
+            "IRS scam",
+        ),
+        (
+            "Your Apple ID was used to sign in from Moscow, Russia. If this wasn't you, tap here to secure your account now. "
+            "We will lock your account in 24 hours unless you verify. Do not ignore this message.",
+            "Account alert phishing",
+        ),
+        (
+            "HR Department - URGENT: We need your direct deposit information for the next payroll. Reply to this email with your full bank routing number and account number. "
+            "Payroll runs in 48 hours. Failure to respond will delay your paycheck. Reply ASAP.",
+            "HR phishing",
+        ),
+        (
+            "[Name] invited you to view a document: 'Q4 Budget.xlsx'. Open with one click: bit.ly/xxxxx. "
+            "You may need to sign in with your Google or Microsoft account to view. Do not share this link.",
+            "Document phishing",
+        ),
+    ],
+    "Normal news": [
+        (
+            "The Federal Reserve announced a 0.25 percentage point increase in the federal funds rate today. "
+            "Markets reacted with modest gains. The decision was widely expected by economists surveyed by Reuters.",
+            "Normal news",
+        ),
+        (
+            "The city council voted 7-2 to approve a $2 million budget for park renovations. Construction is set to begin in spring 2025. "
+            "The project includes new playground equipment and improved accessibility, according to the parks department.",
+            "Local news",
+        ),
+        (
+            "A study published in Circulation found that walking 30 minutes a day was linked to lower blood pressure in adults. "
+            "Researchers at Johns Hopkins followed 400 participants over six months. The study was funded by the National Institutes of Health.",
+            "Health news",
+        ),
+        (
+            "Tesla reported quarterly revenue of $25.5 billion, above analyst expectations. The stock rose 5% in after-hours trading. "
+            "The company cited strong demand in China and Europe in its earnings release.",
+            "Business news",
+        ),
+        (
+            "The Riverside School District will extend winter break by two days due to forecasted severe weather. "
+            "Parents will be notified via the district's alert system. School buses will not run on January 6 and 7.",
+            "School update",
+        ),
+        (
+            "A new species of tree frog was discovered in the Amazon rainforest. Scientists from the University of São Paulo say it is highly sensitive to pollution. "
+            "The finding was published in the journal Nature. Conservation groups are calling for protected status.",
+            "Science news",
+        ),
+        (
+            "The mayor announced a plan to add 100 affordable housing units by 2026. "
+            "Funding will come from federal grants and a small property tax adjustment, according to a statement from the mayor's office.",
+            "Policy news",
+        ),
+        (
+            "The National Weather Service issued a winter storm warning for the region from Friday through Sunday. "
+            "Accumulations of 6 to 12 inches are expected. Residents are advised to avoid travel.",
+            "Weather news",
+        ),
+        (
+            "Highway 101 will have lane closures between exits 42 and 45 this weekend for bridge repair. "
+            "The state Department of Transportation said work is expected to finish by Monday morning. Drivers should use alternate routes.",
+            "Traffic update",
+        ),
+        (
+            "The Metropolitan Museum's new exhibit on ancient Rome opens Saturday. Tickets are available online. "
+            "The exhibit includes more than 200 artifacts on loan from museums in Italy, France, and the UK.",
+            "Culture news",
+        ),
+    ],
 }
 
 # All styles (home + analyze) — dynamic, polished, glassmorphism
@@ -822,6 +979,7 @@ with st.sidebar:
         for sec in SECTIONS:
             label = sec["sample_label"]
             if st.button(label, use_container_width=True, key=f"sample_{hash(label)}"):
+                st.session_state.input_text = ""
                 st.session_state.last_result = None
                 st.session_state.suggested_quiz_type = sec["quiz_type"]
                 st.session_state.selected_section = sec["id"]
@@ -940,16 +1098,18 @@ else:
             <span class="step"><span class="step-num">3</span> See verdict, evidence & red flags</span>
         </div>
         """, unsafe_allow_html=True)
-        # Try a sample: only show the sample that matches the current mode
-        _section_to_sample = {s["id"]: (s["sample_label"], f"Load {s['sample_label']} sample") for s in SECTIONS}
-        _sample_key, _sample_label = _section_to_sample.get(
-            st.session_state.selected_section,
-            (SECTIONS[0]["sample_label"], f"Load {SECTIONS[0]['sample_label']} sample"),
-        )
+        # Try a sample: only show the sample that matches the current mode; randomize from corpus
+        _section_to_sample = {
+            "fact_check": ("Fact Check", "Load Fact Check sample"),
+            "scam_phishing": ("Phishing scams", "Load Phishing sample"),
+            "normal_news": ("Normal news", "Load Normal news sample"),
+        }
+        _sample_key, _sample_label = _section_to_sample.get(st.session_state.selected_section, ("Fact Check", "Load Fact Check sample"))
         with st.expander("💡 Try a sample", expanded=False):
-            st.caption("Load sample text into the box below to run a quick analysis.")
+            st.caption("Load a random sample into the box below to run a quick analysis.")
             if st.button(_sample_label, key="sample_analyzer_current", use_container_width=True):
-                st.session_state.input_text = SAMPLE_INPUTS[_sample_key][0]
+                chosen = random.choice(SAMPLE_INPUTS[_sample_key])
+                st.session_state.input_text = chosen[0]
                 st.rerun()
         user_input = st.text_area(
         "Paste text to analyze",
@@ -977,7 +1137,8 @@ else:
                     else:
                         st.write("Searching the web (DuckDuckGo) for evidence...")
                     st.write("Checking for manipulation & AI signals...")
-                    result_dict = run_analysis(user_input.strip(), content_type)
+                    with st.spinner("Analyzing..."):
+                        result_dict = _run_analysis_in_thread(user_input.strip(), content_type)
                     st.write("Computing fact-check metrics...")
                     status.update(label="Done!", state="complete")
                 result_dict["source_url"] = st.session_state.get("source_url", "")
