@@ -727,16 +727,6 @@ st.markdown("""
         color: #64748b;
         margin-bottom: 0.75rem;
     }
-    .sidebar-trust-badge {
-        margin-top: 1.5rem;
-        padding: 1rem;
-        background: rgba(34, 197, 94, 0.08);
-        border: 1px solid rgba(34, 197, 94, 0.2);
-        border-radius: 12px;
-        font-size: 0.8rem;
-        color: #94a3b8;
-    }
-    .sidebar-trust-badge strong { color: #4ade80; }
     [data-testid="stSidebar"] .stButton > button {
         border-radius: 12px !important;
         transition: all 0.3s ease !important;
@@ -1005,6 +995,7 @@ with st.sidebar:
         st.divider()
         if st.button("← Back to Home", use_container_width=True, key="back_home"):
             st.session_state.show_analyze = False
+            st.rerun()
         if st.button("🗑️ Clear results", use_container_width=True, key="clear_results"):
             st.session_state.last_result = None
             if "cached_report_hash" in st.session_state:
@@ -1036,12 +1027,7 @@ with st.sidebar:
                 st.session_state.show_analyze = True
                 st.session_state.selected_section = sec["id"]
                 st.session_state.suggested_quiz_type = sec["quiz_type"]
-        st.markdown(
-            '<div class="sidebar-trust-badge">'
-            '<strong>✓</strong> Backed by Backboard • Web & knowledge base verification'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+                st.rerun()
     st.divider()
     st.caption("Clarion • Siren's Call Track")
 
@@ -1071,6 +1057,7 @@ if not st.session_state.show_analyze:
                 st.session_state.show_analyze = True
                 st.session_state.selected_section = sec["id"]
                 st.session_state.suggested_quiz_type = sec["quiz_type"]
+                st.rerun()
     st.markdown("""
     <div class="home-footer">
         <strong>Siren's Call Track</strong> • Hackathon — Built to help you verify information and stay safe online.
@@ -1411,18 +1398,18 @@ else:
             st.caption("Open the file in a browser and use Print → Save as PDF to get a PDF.")
         else:
             _tip = (
-                '👆 Paste text above (or use **Or analyze from URL** for Normal news), '
-                'then click **Analyze**. Results show verdicts, evidence, and scam/AI signals.'
+                '👆 Paste text above (or use <strong>Or analyze from URL</strong> for Normal news), '
+                'then click <strong>Analyze</strong>. Results show verdicts, evidence, and scam/AI signals.'
             )
             if st.session_state.selected_section == "fact_check":
                 _tip = (
-                    '👆 Paste text above, or **Or upload a document** (PDF/DOCX) to summarize and fact-check. '
-                    'Then click **Analyze**. Results show document summary, verdicts, evidence, and scam/AI signals.'
+                    '👆 Paste text above, or <strong>Or upload a document</strong> (PDF/DOCX) to summarize and fact-check. '
+                    'Then click <strong>Analyze</strong>. Results show document summary, verdicts, evidence, and scam/AI signals.'
                 )
             elif _show_url_section:
                 _tip = (
-                    '👆 Paste text above, or use **Or analyze from URL** to fetch an article and analyze it. '
-                    'Then click **Analyze**. Results show verdicts, evidence, and scam/AI signals.'
+                    '👆 Paste text above, or use <strong>Or analyze from URL</strong> to fetch an article and analyze it. '
+                    'Then click <strong>Analyze</strong>. Results show verdicts, evidence, and scam/AI signals.'
                 )
             st.markdown(
                 f'<div class="analyzer-tip-box">{_tip}</div>',
