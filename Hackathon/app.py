@@ -62,8 +62,8 @@ st.set_page_config(
 
 # Section-specific titles and descriptions
 SECTION_CONTENT = {
-    "claim_verification": {
-        "title": "🔍 Claim Verification",
+    "normal_news": {
+        "title": "🔍 Normal News",
         "description": "Extract factual claims and verify them against web sources or our knowledge base.",
     },
     "scam_phishing": {
@@ -84,9 +84,10 @@ QUICK_LOAD_TO_QUIZ = {
 }
 # Quick Load label -> section key (so Analyzer title/description match the loaded sample)
 QUICK_LOAD_TO_SECTION = {
-    "Fact checker": "claim_verification",
+    "Fact checker": "fact_check",
     "Phishing scams": "scam_phishing",
-    "Normal news": "fact_check",
+    "Normal news": "normal_news",  
+
 }
 
 # Session state
@@ -385,9 +386,9 @@ if not st.session_state.show_analyze:
     st.subheader("What we do")
     col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button("📰 **Claim Verification**\n\nExtract factual claims and check them against web sources or our knowledge base.", key="card1", use_container_width=True):
+        if st.button("📰 **Normal News**\n\nExtract factual claims and check them against web sources or our knowledge base.", key="card1", use_container_width=True):
             st.session_state.show_analyze = True
-            st.session_state.selected_section = "claim_verification"
+            st.session_state.selected_section = "normal_news"
             st.rerun()
     with col2:
         if st.button("🛡️ **Scam & Phishing**\n\nDetect social engineering, urgency tactics, and red flags in emails and messages.", key="card2", use_container_width=True):
@@ -403,15 +404,18 @@ if not st.session_state.show_analyze:
 else:
     # Analyzer / Trainer section switcher (persists across reruns so clicking a section always works)
     SECTION_OPTIONS = ["🔍 Analyzer", "🎯 Trainer"]
-    if "main_section" not in st.session_state or st.session_state.main_section not in SECTION_OPTIONS:
-        tab = st.session_state.active_tab
-        st.session_state.main_section = SECTION_OPTIONS[0] if tab == "analyzer" else SECTION_OPTIONS[1]
-    choice = st.radio(
-        "Section",
-        SECTION_OPTIONS,
-        key="main_section",
-        horizontal=True,
-        label_visibility="collapsed",
+    
+    if "main_section" not in st.session_state:
+        st.session_state.main_section = (
+            SECTION_OPTIONS[0]
+            if st.session_state.active_tab == "analyzer"
+            else SECTION_OPTIONS[1]
+        )
+    choice = st.segmented_control(
+    "Section",
+    SECTION_OPTIONS,
+    key="main_section",
+    label_visibility="collapsed",
     )
     st.session_state.active_tab = "analyzer" if choice == "🔍 Analyzer" else "trainer"
 
@@ -484,7 +488,7 @@ else:
                 st.write("**Social engineering risk:**", result["social_engineering"]["risk_level"])
                 st.write("**AI-generated likelihood:**", f"{result['ai_detection']['ai_likelihood']*100:.0f}%")
             with tab2:
-                st.subheader("Claim Verification")
+                st.subheader("Normal News")
                 if result["claims"]:
                     for c in result["claims"]:
                         verdict_class = f"verdict-{c['verdict'].lower()}"
