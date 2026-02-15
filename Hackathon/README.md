@@ -7,11 +7,12 @@ A hackathon-ready webapp for the **Siren's Call** track: analyzing text for misi
 - **Web Verify (default)** – Fact-check claims using DuckDuckGo web search. No API key. Used by default for normal news and misinformation; falls back to local RAG if web fails.
 - **Claim extraction** – Rule-based extraction of 1–6 atomic claims (no LLM)
 - **Local RAG verification** – Offline fallback when web verification is unavailable
-- **Misinformation detector** – Sensational language, all-caps, urgency signals
-- **Social engineering detector** – Phishing/scam patterns (urgency, authority, credentials)
+- **Misinformation risk** – Derived from verifier verdicts (Backboard/BERT)
+- **Social engineering (safe/unsafe)** – Derived from Backboard or BERT verdicts (no separate rule-based detector)
 - **AI-generated detector** – Heuristics for AI-like text (repetition, generic phrases)
 - **Fact-check metrics** – Correct count, incorrect count, and confidence in the response
 - **Backboard** – Optional claim verification via Backboard API when `BACKBOARD_API_KEY` is set; falls back to DuckDuckGo then local RAG.
+- **Scam/Phishing** – BERT classifies message content and extracted URLs (URL phishing); no API key.
 
 ## Install & Run
 
@@ -24,7 +25,7 @@ Or simply `streamlit run app.py` (you may be prompted for email—leave blank to
 
 The app will open in your browser at `http://localhost:8501`.
 
-**Note:** The first run may take 1–2 minutes while the embedding model (`all-MiniLM-L6-v2`) downloads. Subsequent runs are faster.
+**Note:** The first run may take 1–2 minutes while the BERT model (phishing + optional RAG embeddings) downloads. Subsequent runs are faster.
 
 ### Optional: API keys (.env)
 
@@ -34,16 +35,25 @@ Create a `.env` file in the `Hackathon` folder (copy from `.env.example`) and ad
 cp .env.example .env
 # Edit .env and set:
 # BACKBOARD_API_KEY=your_backboard_key   # for claim verification in Analyzer
-# GEMINI_API_KEY=your_gemini_key         # for Gemini-based verification
 ```
 
-The app loads `.env` at startup, so **Backboard** (claim verification) and **Gemini** features will use these keys. Do not commit `.env`.
+The app loads `.env` at startup for **Backboard** (claim verification). **Phishing detection** uses BERT only (message + URL phishing; no API key). Do not commit `.env`.
 
 ## Web Verification (default, no toggle)
 
 Claims are verified against the **live web** using **DuckDuckGo search** (no API key). This is always on for normal news and misinformation—there is no toggle. If web verification fails (e.g. no network), the app falls back to the local knowledge base.
 
 The Evidence tab shows search snippets and clickable source URLs when web verification was used.
+
+## Verifier Flow (All Sections)
+
+Each section uses one of: **BERT**, **Backboard**, or **DuckDuckGo** (with RAG as offline fallback):
+
+| Section       | Primary                    | Fallbacks                                      |
+|---------------|----------------------------|------------------------------------------------|
+| Fact Check    | Backboard                  | DuckDuckGo → RAG                               |
+| Normal News   | DuckDuckGo                 | Backboard → RAG (+ Backboard synthesis when web succeeds) |
+| Scam/Phishing | BERT (message + URL) | Backboard → DuckDuckGo → RAG                   |
 
 ## How Fact-Check Metrics Work
 
@@ -75,13 +85,13 @@ Use the sidebar buttons to load examples:
     ├── pipeline.py        # Main orchestration
     ├── preprocessing.py   # Text cleaning
     ├── claim_extraction.py
-    ├── misinformation_detector.py
-    ├── social_engineering_detector.py
     ├── ai_text_detector.py
     ├── web_verifier.py    # DuckDuckGo web search (default)
     ├── rag_verifier.py    # Local RAG (fallback)
     ├── backboard_client.py   # Backboard API (fact-check assistant)
     ├── backboard_verifier.py  # Claim verification via Backboard
+    ├── local_model.py        # BERT phishing + RAG embeddings
+    ├── phishing_verifier.py  # Message + URL phishing via BERT
     ├── scoring.py
     ├── utils.py
     └── kb/

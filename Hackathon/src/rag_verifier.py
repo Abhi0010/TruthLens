@@ -7,20 +7,8 @@ from typing import List, Optional
 
 from .utils import get_kb_path
 
-# Lazy load sentence-transformers to avoid slow startup
-_embedding_model = None
-
-
-def _get_embedding_model():
-    """Lazy load the embedding model."""
-    global _embedding_model
-    if _embedding_model is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-            _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-        except Exception:
-            _embedding_model = None
-    return _embedding_model
+# Use single BERT phishing model for RAG embeddings (replaces sentence-transformers)
+from .local_model import get_embedding_model as _get_embedding_model
 
 
 # Contradiction keywords in KB chunks

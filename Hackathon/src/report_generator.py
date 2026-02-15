@@ -33,7 +33,13 @@ def generate_html_report(
     summary = r.get("fact_check_summary") or "No claims to verify"
     confidence = r.get("response_confidence", 0) * 100
     vmode = r.get("verification_mode", "offline")
-    mode_label = "Backboard" if vmode == "backboard" else "Internet (DuckDuckGo)" if vmode == "web" else "Local knowledge base"
+    mode_label = (
+        "Backboard" if vmode == "backboard"
+        else "Internet (DuckDuckGo)" if vmode == "web"
+        else "DuckDuckGo + Backboard" if vmode == "web+backboard"
+        else "BERT (message + URL phishing)" if vmode == "local_model"
+        else "Local knowledge base"
+    )
 
     claims_html = ""
     for c in r.get("claims") or []:

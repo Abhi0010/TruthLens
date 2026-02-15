@@ -1,20 +1,134 @@
 """Main orchestration pipeline for Clarion."""
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from .ai_text_detector import AIDetectionResult, detect_ai_generated
 from .claim_extraction import extract_claims
-from .misinformation_detector import MisinformationResult, detect_misinformation
 from .preprocessing import clean_text
 from .rag_verifier import RAGVerifier, VerdictResult
 from .scoring import ClaimVerdict, compute_fact_check_metrics
-from .social_engineering_detector import RiskLevel, SocialEngineeringResult, detect_social_engineering
 from .utils import is_empty_input
 from .web_verifier import WebVerifier
 
 from .backboard_client import is_configured as backboard_configured, synthesize_fact_check
 from .backboard_verifier import BackboardVerifier
+from .phishing_verifier import verify_claims as phishing_verify_claims
+
+
+class RiskLevel(str, Enum):
+    """Risk level derived from verifier verdicts (Backboard/BERT)."""
+
+    LOW = "Low"
+    MEDIUM = "Medium"
+    HIGH = "High"
+
+
+@dataclass
+class SocialEngineeringResult:
+    """Safe/unsafe result derived from Backboard or BERT verdicts."""
+
+    risk_level: RiskLevel
+    red_flags: List[str]
+    safer_rewrite_suggestion: str
+
+
+def _social_engineering_from_verdicts(
+    verdicts: List[VerdictResult], verification_mode: str
+) -> SocialEngineeringResult:
+    """
+    Derive safe/unsafe (risk level, red flags) from verifier verdicts.
+    Phishing mode (local_model): Supported = unsafe, Refuted = safe.
+    Fact-check modes (backboard, web, web+backboard, offline): Refuted = unsafe, Supported = safe.
+    """
+    is_phishing_mode = verification_mode == "local_model"
+
+    if not verdicts:
+        return SocialEngineeringResult(
+            risk_level=RiskLevel.LOW,
+            red_flags=["No claims to verify; no AI verdict available."],
+            safer_rewrite_suggestion="No content was verified by Backboard or BERT.",
+        )
+
+    unsafe_verdict = "Supported" if is_phishing_mode else "Refuted"
+    safe_verdict = "Refuted" if is_phishing_mode else "Supported"
+
+    unsafe_count = sum(1 for v in verdicts if v.verdict == unsafe_verdict)
+    safe_count = sum(1 for v in verdicts if v.verdict == safe_verdict)
+    unknown_count = len(verdicts) - unsafe_count - safe_count
+
+    red_flags: List[str] = []
+    for v in verdicts:
+        if v.verdict == unsafe_verdict and v.evidence:
+            red_flags.append(v.evidence[0][:200] if v.evidence[0] else f"Claim flagged: {v.claim[:80]}...")
+        elif v.verdict == "Unknown" and v.evidence:
+            red_flags.append(f"Unclear: {v.evidence[0][:150]}..." if len(v.evidence[0]) > 150 else v.evidence[0])
+
+    if not red_flags and unsafe_count > 0:
+        red_flags = [f"{unsafe_count} claim(s) flagged as unsafe by {verification_mode}"]
+    if not red_flags and unknown_count > 0:
+        red_flags = [f"{unknown_count} claim(s) could not be verified"]
+
+    if unsafe_count >= 1:
+        level = RiskLevel.HIGH if unsafe_count >= len(verdicts) // 2 + 1 else RiskLevel.MEDIUM
+    elif unknown_count > 0:
+        level = RiskLevel.MEDIUM
+    else:
+        level = RiskLevel.LOW
+
+    if level == RiskLevel.LOW:
+        suggestion = "Content appears safe based on verifier analysis. No rewrite needed."
+    elif level == RiskLevel.HIGH:
+        suggestion = "Safer approach: Treat this content with caution. Verify through official channels before taking action. Do not share credentials or send money via links in messages."
+    else:
+        suggestion = "Safer approach: Some claims could not be fully verified. Cross-check with trusted sources before relying on this information."
+
+    return SocialEngineeringResult(
+        risk_level=level,
+        red_flags=red_flags if red_flags else ["No obvious risks detected by verifier."],
+        safer_rewrite_suggestion=suggestion,
+    )
+
+
+@dataclass
+class MisinformationResult:
+    """Misinformation risk derived from Backboard or BERT verdicts."""
+
+    risk_score: float  # 0-1
+    reasons: List[str]
+
+
+def _misinformation_from_verdicts(
+    verdicts: List[VerdictResult], verification_mode: str
+) -> MisinformationResult:
+    """
+    Derive misinformation risk from verifier verdicts.
+    Same semantics as social_engineering: unsafe verdicts = misinformation/deceptive content.
+    """
+    is_phishing_mode = verification_mode == "local_model"
+    unsafe_verdict = "Supported" if is_phishing_mode else "Refuted"
+
+    if not verdicts:
+        return MisinformationResult(
+            risk_score=0.0,
+            reasons=["No claims to verify; no AI verdict available."],
+        )
+
+    unsafe_count = sum(1 for v in verdicts if v.verdict == unsafe_verdict)
+    total = len(verdicts)
+    risk_score = min(1.0, unsafe_count / total if total > 0 else 0.0)
+
+    reasons: List[str] = []
+    for v in verdicts:
+        if v.verdict == unsafe_verdict and v.evidence:
+            reasons.append(v.evidence[0][:180] + ("..." if len(v.evidence[0]) > 180 else ""))
+    if not reasons and unsafe_count > 0:
+        reasons = [f"{unsafe_count} claim(s) flagged by {verification_mode}"]
+    if not reasons:
+        reasons = ["No misinformation signals from verifier analysis."]
+
+    return MisinformationResult(risk_score=risk_score, reasons=reasons[:5])
 
 
 @dataclass
@@ -36,7 +150,7 @@ class PipelineResult:
     ai_detection: AIDetectionResult = field(default_factory=lambda: AIDetectionResult(0.0, []))
     evidence_passages: List[Dict[str, Any]] = field(default_factory=list)
     raw_text: str = ""
-    verification_mode: str = "offline"  # "offline", "web", "backboard", or "web+backboard"
+    verification_mode: str = "offline"  # "offline", "web", "backboard", "web+backboard", "local_model"
     citations: List[str] = field(default_factory=list)  # Aggregated URLs from evidence
 
 
@@ -81,71 +195,70 @@ def run_pipeline(
                         urls.append(u)
         return urls[:20]  # Limit to 20 citations
 
-    # 2. Claim verification
-    # Fact checker: Backboard only
-    # Normal news: DuckDuckGo first → Backboard synthesis (finalize)
-    # Scam/phishing: Backboard first, fallback DuckDuckGo/RAG
-    # Other: DuckDuckGo first, fallback Backboard/RAG
+    # 2. Claim verification — all sections use BERT/Backboard/DuckDuckGo (RAG fallback)
+    # Fact Check: Backboard → DuckDuckGo → RAG
+    # Normal News: DuckDuckGo → Backboard → RAG (Backboard synthesis applied if web succeeded)
+    # Scam/Phishing: BERT (message + URL phishing) → Backboard → DuckDuckGo → RAG
     verdicts: List[VerdictResult] = []
-    if claims_raw:
-        if is_fact_check_only and backboard_configured() and BackboardVerifier is not None:
+    # Use extracted claims or full text so we always try verification
+    claims_to_verify = claims_raw if claims_raw else [result.raw_text[:2000]] if result.raw_text else []
+    if claims_to_verify:
+        def _try_backboard() -> bool:
+            if not backboard_configured() or BackboardVerifier is None:
+                return False
             try:
-                backboard_verifier = BackboardVerifier()
-                verdicts = backboard_verifier.verify_claims(claims_raw)
+                nonlocal verdicts
+                bv = BackboardVerifier()
+                verdicts = bv.verify_claims(claims_to_verify)
                 result.verification_mode = "backboard"
                 result.citations = _extract_citations(verdicts)
+                return bool(verdicts)
             except Exception:
-                pass
-        elif is_normal_news:
-            # Normal news: DuckDuckGo first, then Backboard synthesis
+                return False
+
+        def _try_web() -> bool:
             for attempt in range(2):
                 try:
-                    web_verifier = WebVerifier(max_results_per_claim=8)
-                    verdicts = web_verifier.verify_claims(claims_raw)
-                    result.verification_mode = "web"  # Will become "web+backboard" after synthesis
-                    result.citations = _extract_citations(verdicts)
-                    break
-                except Exception:
-                    if attempt == 1:
-                        verdicts = []
-                    continue
-        elif is_phishing and backboard_configured() and BackboardVerifier is not None:
-            try:
-                backboard_verifier = BackboardVerifier()
-                verdicts = backboard_verifier.verify_claims(claims_raw)
-                result.verification_mode = "backboard"
-                result.citations = _extract_citations(verdicts)
-            except Exception:
-                pass
-        if not verdicts and not is_fact_check_only:
-            # Fact checker uses Backboard only; skip DuckDuckGo fallback
-            for attempt in range(2):
-                try:
-                    web_verifier = WebVerifier(max_results_per_claim=8)
-                    verdicts = web_verifier.verify_claims(claims_raw)
+                    nonlocal verdicts
+                    wv = WebVerifier(max_results_per_claim=8)
+                    verdicts = wv.verify_claims(claims_to_verify)
                     result.verification_mode = "web"
                     result.citations = _extract_citations(verdicts)
-                    break
+                    return bool(verdicts)
                 except Exception:
                     if attempt == 1:
                         verdicts = []
-                    continue
-        if not verdicts and backboard_configured() and BackboardVerifier is not None and not is_fact_check_only:
+            return False
+
+        def _try_rag() -> bool:
             try:
-                backboard_verifier = BackboardVerifier()
-                verdicts = backboard_verifier.verify_claims(claims_raw)
-                result.verification_mode = "backboard"
-                result.citations = _extract_citations(verdicts)
-            except Exception:
-                pass
-        if not verdicts:
-            try:
+                nonlocal verdicts
                 verifier = rag_verifier or RAGVerifier()
-                verdicts = verifier.verify_claims(claims_raw)
+                verdicts = verifier.verify_claims(claims_to_verify)
                 result.verification_mode = "offline"
                 result.citations = _extract_citations(verdicts)
+                return bool(verdicts)
+            except Exception:
+                return False
+
+        # Primary by content type
+        if is_phishing:
+            try:
+                # Prefer full text for phishing (better context); fallback to claims
+                phish_input = [result.raw_text[:2000]] if result.raw_text else claims_to_verify
+                verdicts, phish_mode = phishing_verify_claims(phish_input)
+                if verdicts:
+                    result.verification_mode = phish_mode
+                    result.citations = _extract_citations(verdicts)
             except Exception:
                 pass
+
+        if not verdicts and is_fact_check_only:
+            _try_backboard() or _try_web() or _try_rag()
+        elif not verdicts and is_normal_news:
+            _try_web() or _try_backboard() or _try_rag()
+        elif not verdicts:
+            _try_backboard() or _try_web() or _try_rag()
 
     # Convert to ClaimVerdict for scoring
     result.claims = [
@@ -192,11 +305,11 @@ def run_pipeline(
         except Exception:
             pass
 
-    # 3. Misinformation detector
-    result.misinformation = detect_misinformation(text)
+    # 3. Misinformation risk — derived from Backboard or BERT verdicts
+    result.misinformation = _misinformation_from_verdicts(verdicts, result.verification_mode)
 
-    # 4. Social engineering detector
-    result.social_engineering = detect_social_engineering(text)
+    # 4. Social engineering (safe/unsafe) — derived from Backboard or BERT verdicts
+    result.social_engineering = _social_engineering_from_verdicts(verdicts, result.verification_mode)
 
     # 5. AI-generated detector
     result.ai_detection = detect_ai_generated(text)

@@ -542,6 +542,7 @@ st.markdown("""
     .web-badge { display: inline-block; background: linear-gradient(135deg,#166534,#22c55e); color: white; padding: 3px 10px; border-radius: 8px; font-size: 0.7rem; font-weight: 600; margin-left: 6px; box-shadow: 0 2px 8px rgba(34,197,94,0.3); }
     .offline-badge { display: inline-block; background: linear-gradient(135deg,#854d0e,#ca8a04); color: white; padding: 3px 10px; border-radius: 8px; font-size: 0.7rem; font-weight: 600; margin-left: 6px; }
     .backboard-badge { display: inline-block; background: linear-gradient(135deg,#1e40af,#3b82f6); color: white; padding: 3px 10px; border-radius: 8px; font-size: 0.7rem; font-weight: 600; margin-left: 6px; box-shadow: 0 2px 8px rgba(59,130,246,0.3); }
+    .local-model-badge { display: inline-block; background: linear-gradient(135deg,#7c3aed,#a78bfa); color: white; padding: 3px 10px; border-radius: 8px; font-size: 0.7rem; font-weight: 600; margin-left: 6px; box-shadow: 0 2px 8px rgba(167,139,250,0.3); }
 
     /* ----- Trainer: glassmorphism message card ----- */
     .trainer-message-card {
@@ -1135,7 +1136,7 @@ else:
                         st.write("Searching the web (DuckDuckGo) for evidence...")
                         st.write("Sending results to Backboard for synthesis...")
                     else:
-                        st.write("Searching the web (DuckDuckGo) for evidence...")
+                        st.write("Checking with BERT (message + URL phishing)...")
                     st.write("Checking for manipulation & AI signals...")
                     with st.spinner("Analyzing..."):
                         result_dict = _run_analysis_in_thread(user_input.strip(), content_type)
@@ -1163,6 +1164,8 @@ else:
                 mode_badge = '<span class="web-badge">DUCKDUCKGO</span> <span class="backboard-badge">BACKBOARD</span>'
             elif vmode == "web":
                 mode_badge = '<span class="web-badge">WEB</span>'
+            elif vmode == "local_model":
+                mode_badge = '<span class="local-model-badge">BERT</span>'
             else:
                 mode_badge = '<span class="offline-badge">OFFLINE</span>'
             col1, col2 = st.columns(2)
@@ -1186,7 +1189,7 @@ else:
                     else:
                         summary = "Mixed"
                     card_title = "Fact check"
-                _src_map = {"backboard": "Using Backboard", "web+backboard": "DuckDuckGo → Backboard", "web": "Using internet (DuckDuckGo)"}
+                _src_map = {"backboard": "Using Backboard", "web+backboard": "DuckDuckGo → Backboard", "web": "Using internet (DuckDuckGo)", "local_model": "BERT (message + URL phishing)"}
                 source_note = _src_map.get(vmode) or "No internet — local KB only (limited)"
                 st.markdown(
                     f'<div class="trust-card"><div>{card_title} {mode_badge}</div>'
@@ -1209,7 +1212,7 @@ else:
                 else:
                     st.write(f"**Fact check:** {result.get('fact_check_summary', 'No claims to verify')}")
                 st.write(f"**Confidence in response:** {result['response_confidence']*100:.0f}%")
-                _src_text = {"backboard": "Using Backboard", "web+backboard": "DuckDuckGo web search → Backboard synthesis", "web": "Using internet (DuckDuckGo web search)"}
+                _src_text = {"backboard": "Using Backboard", "web+backboard": "DuckDuckGo web search → Backboard synthesis", "web": "Using internet (DuckDuckGo web search)", "local_model": "BERT (message + URL phishing, no API)"}
                 st.write(f"**Fact checker source:** {_src_text.get(vmode) or 'No internet — local knowledge base only (results may be limited)'}")
                 st.write("**Top reasons:**")
                 # Build reasons from claims so each line includes the claim text
