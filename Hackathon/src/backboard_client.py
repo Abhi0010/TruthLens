@@ -88,6 +88,52 @@ def create_synthesizer_assistant() -> Optional[str]:
     )
 
 
+SUMMARIZER_SYSTEM_PROMPT = (
+    "You are a document summarizer. You receive long text (e.g. from a PDF or article). "
+    "Respond with a concise summary in 2–4 sentences that captures the main points. "
+    "Use EXACTLY this format (nothing else):\n"
+    "SUMMARY: Your summary here."
+)
+# Max chars to send to Backboard for summarization (avoid token limits)
+MAX_SUMMARY_INPUT_CHARS = 30_000
+
+
+def create_summarizer_assistant() -> Optional[str]:
+    """Create a Backboard assistant for summarizing documents. Returns assistant_id or None."""
+    return create_assistant(
+        name="Clarion Summarizer",
+        system_prompt=SUMMARIZER_SYSTEM_PROMPT,
+    )
+
+
+def summarize_document(text: str) -> Optional[str]:
+    """
+    Send document text to Backboard and return a short summary (2–4 sentences).
+    Returns None if Backboard is not configured or the request fails.
+    """
+    headers = _get_headers()
+    if not headers.get("X-API-Key"):
+        return None
+    assistant_id = create_summarizer_assistant()
+    if not assistant_id:
+        return None
+    thread_id = create_thread(assistant_id)
+    if not thread_id:
+        return None
+    payload = (text or "").strip()[:MAX_SUMMARY_INPUT_CHARS]
+    if not payload:
+        return None
+    content = send_message(thread_id, payload, stream=False)
+    if not content or not content.strip():
+        return None
+    # Parse "SUMMARY: ..." from response
+    for line in content.strip().splitlines():
+        line_stripped = line.strip()
+        if line_stripped.upper().startswith("SUMMARY:"):
+            return line_stripped.split(":", 1)[1].strip()
+    return content.strip()[:500]
+
+
 def _parse_synthesis_response(content: Optional[str]) -> Optional[Dict[str, Any]]:
     """Parse synthesizer reply into { fact_check_summary, top_reasons, citations }."""
     import re

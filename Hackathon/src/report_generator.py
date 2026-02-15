@@ -30,6 +30,7 @@ def generate_html_report(
     elif source_url and source_url.startswith("http"):
         source_line = f'<p class="meta-line"><strong>Source URL:</strong> <a href="{html.escape(source_url)}">{html.escape(source_url)}</a></p>'
 
+    doc_summary = r.get("document_summary", "").strip()
     summary = r.get("fact_check_summary") or "No claims to verify"
     confidence = r.get("response_confidence", 0) * 100
     vmode = r.get("verification_mode", "offline")
@@ -193,6 +194,7 @@ a:hover {{ text-decoration: underline; }}
 {input_html}
 
 <div class="meta-block">
+{f'<p class="meta-line"><strong>Document summary:</strong> {html.escape(doc_summary)}</p>' if doc_summary else ''}
 <p class="meta-line"><strong>Fact check summary:</strong> {html.escape(summary)}</p>
 <p class="meta-line"><strong>Confidence in response:</strong> {confidence:.0f}%</p>
 <p class="meta-line"><strong>Verification source:</strong> {html.escape(mode_label)}</p>

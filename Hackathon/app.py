@@ -20,6 +20,8 @@ from src.rag_verifier import RAGVerifier
 from src.report_generator import generate_html_report
 from src.trainer_rounds import get_trainer_rounds
 from src.url_fetcher import fetch_and_extract
+from src.document_upload import extract_text_from_file
+from src.backboard_client import is_configured as backboard_configured, summarize_document
 
 
 @st.cache_resource
@@ -876,13 +878,11 @@ def _render_trainer():
         st.success(f"Quiz complete! Score: {st.session_state.score}/{n} ({pct:.0f}%)")
         if st.button("Restart Quiz", key="trainer_restart"):
             _init_quiz(quiz_type)
-            st.rerun()
         return
 
     # During quiz: single Restart option
     if st.button("Restart Quiz", key="trainer_restart"):
         _init_quiz(quiz_type)
-        st.rerun()
 
     # Header: Round x/N, Score, Streak, progress bar (only when still in quiz)
     progress_pct = min(1.0, (current + 1) / n) if n else 0
@@ -956,7 +956,6 @@ def _render_trainer():
                 st.session_state.streak += 1
             else:
                 st.session_state.streak = 0
-            st.rerun()
 
     if st.session_state.reveal:
         correct = st.session_state.selected_option == correct_tactic
@@ -972,7 +971,6 @@ def _render_trainer():
             st.session_state.current_round += 1
             st.session_state.selected_option = None
             st.session_state.reveal = False
-            st.rerun()
 
     st.divider()
     with st.expander("Review Mistakes"):
@@ -1004,14 +1002,14 @@ with st.sidebar:
                 # Switch to Analyzer when changing section (so Trainer → section change shows Analyzer first)
                 st.session_state.active_tab = "analyzer"
                 st.session_state.main_section = "🔍 Analyzer"
-                st.rerun()
         st.divider()
         if st.button("← Back to Home", use_container_width=True, key="back_home"):
             st.session_state.show_analyze = False
-            st.rerun()
         if st.button("🗑️ Clear results", use_container_width=True, key="clear_results"):
             st.session_state.last_result = None
-            st.rerun()
+            if "cached_report_hash" in st.session_state:
+                del st.session_state["cached_report_hash"]
+                del st.session_state["cached_report_html"]
     else:
         # Homepage sidebar — richer design
         st.markdown(
@@ -1038,7 +1036,6 @@ with st.sidebar:
                 st.session_state.show_analyze = True
                 st.session_state.selected_section = sec["id"]
                 st.session_state.suggested_quiz_type = sec["quiz_type"]
-                st.rerun()
         st.markdown(
             '<div class="sidebar-trust-badge">'
             '<strong>✓</strong> Backed by Backboard • Web & knowledge base verification'
@@ -1074,7 +1071,6 @@ if not st.session_state.show_analyze:
                 st.session_state.show_analyze = True
                 st.session_state.selected_section = sec["id"]
                 st.session_state.suggested_quiz_type = sec["quiz_type"]
-                st.rerun()
     st.markdown("""
     <div class="home-footer">
         <strong>Siren's Call Track</strong> • Hackathon — Built to help you verify information and stay safe online.
@@ -1125,9 +1121,8 @@ else:
                 st.session_state.input_text = chosen[0]
                 st.session_state.source_url = ""
                 st.session_state.source_label = ""
-                st.rerun()
-        # URL section for Fact Check and Normal News: fetch URL, extract text, run same pipeline
-        _show_url_section = st.session_state.selected_section in ("fact_check", "normal_news")
+        # URL section for Normal News only: fetch URL, extract text, run same pipeline
+        _show_url_section = st.session_state.selected_section == "normal_news"
         if _show_url_section:
             with st.expander("🔗 Or analyze from URL", expanded=False):
                 st.caption("Enter a news or article URL to fetch and fact-check the same way as pasted text.")
@@ -1169,10 +1164,58 @@ else:
                                 result_dict["input_text"] = text
                                 st.session_state.last_result = result_dict
                                 st.session_state.last_input_hash = hash(text)
+                                if "cached_report_hash" in st.session_state:
+                                    del st.session_state["cached_report_hash"]
+                                    del st.session_state["cached_report_html"]
                                 st.success(f"Fetched: **{title[:80]}{'...' if len(title) > 80 else ''}**")
-                                st.rerun()
                         except Exception as e:
                             st.error(f"Could not fetch URL: {e}")
+        # Document upload for Fact Check only: PDF/DOCX → extract text, summarize (Backboard), fact-check
+        if st.session_state.selected_section == "fact_check":
+            with st.expander("📄 Or upload a document", expanded=False):
+                st.caption("Upload a PDF or DOCX to summarize and fact-check. We extract text, summarize it, and flag claims that may be incorrect.")
+                doc_file = st.file_uploader(
+                    "Choose a file",
+                    type=["pdf", "docx"],
+                    key="fact_check_doc_upload",
+                    label_visibility="collapsed",
+                )
+                doc_analyze_clicked = st.button("Extract & Analyze", key="analyze_doc_btn")
+                if doc_analyze_clicked and doc_file:
+                    with st.spinner("Extracting text from document..."):
+                        try:
+                            text, doc_name = extract_text_from_file(doc_file)
+                            st.session_state.input_text = text
+                            st.session_state.source_url = ""
+                            st.session_state.source_label = doc_name
+                            content_type = "fact_check"
+                            doc_summary = None
+                            with st.status("Analyzing...", expanded=True) as status:
+                                st.write("Extracting claims...")
+                                st.write("Verifying claims with Backboard...")
+                                st.write("Checking for manipulation & AI signals...")
+                                with st.spinner("Analyzing..."):
+                                    result_dict = _run_analysis_in_thread(text, content_type)
+                                if backboard_configured():
+                                    st.write("Summarizing document...")
+                                    doc_summary = summarize_document(text)
+                                st.write("Computing fact-check metrics...")
+                                status.update(label="Done!", state="complete")
+                            result_dict["source_url"] = ""
+                            result_dict["source_label"] = doc_name
+                            result_dict["input_text"] = text
+                            if doc_summary:
+                                result_dict["document_summary"] = doc_summary
+                            st.session_state.last_result = result_dict
+                            st.session_state.last_input_hash = hash(text)
+                            if "cached_report_hash" in st.session_state:
+                                del st.session_state["cached_report_hash"]
+                                del st.session_state["cached_report_html"]
+                            st.success(f"Analyzed **{doc_name}**")
+                        except ValueError as e:
+                            st.error(str(e))
+                        except Exception as e:
+                            st.error(f"Could not process document: {e}")
         user_input = st.text_area(
         "Paste text to analyze",
         height=200,
@@ -1211,7 +1254,9 @@ else:
                 result_dict["input_text"] = user_input.strip()
                 st.session_state.last_result = result_dict
                 st.session_state.last_input_hash = input_hash
-                st.rerun()
+                if "cached_report_hash" in st.session_state:
+                    del st.session_state["cached_report_hash"]
+                    del st.session_state["cached_report_html"]
         if st.session_state.last_result is not None:
             result = st.session_state.last_result
             source_label = result.get("source_label", "") or st.session_state.get("source_label", "")
@@ -1271,6 +1316,8 @@ else:
             ])
             with tab1:
                 st.subheader("Quick Check Summary")
+                if result.get("document_summary"):
+                    st.write("**Document summary:**", result["document_summary"])
                 if content_type == "scam_phishing":
                     st.write(f"**Scam check:** {summary}")
                 else:
@@ -1337,12 +1384,22 @@ else:
                 st.write("**Safer approach:**")
                 st.info(result["social_engineering"]["safer_rewrite_suggestion"])
             st.divider()
-            report_html = generate_html_report(
-                result,
-                source_url=result.get("source_url", ""),
-                source_label=result.get("source_label", ""),
-                input_text=result.get("input_text", ""),
-            )
+            # Cache report HTML by result so we don't regenerate on every rerun
+            _rh = st.session_state.get("last_input_hash")
+            if (
+                st.session_state.get("cached_report_hash") == _rh
+                and st.session_state.get("cached_report_html")
+            ):
+                report_html = st.session_state["cached_report_html"]
+            else:
+                report_html = generate_html_report(
+                    result,
+                    source_url=result.get("source_url", ""),
+                    source_label=result.get("source_label", ""),
+                    input_text=result.get("input_text", ""),
+                )
+                st.session_state["cached_report_hash"] = _rh
+                st.session_state["cached_report_html"] = report_html
             st.download_button(
                 "Download report (HTML)",
                 data=report_html,
@@ -1354,12 +1411,17 @@ else:
             st.caption("Open the file in a browser and use Print → Save as PDF to get a PDF.")
         else:
             _tip = (
-                '👆 Paste text above (or use **Or analyze from URL** for Fact Check / Normal news), '
+                '👆 Paste text above (or use **Or analyze from URL** for Normal news), '
                 'then click **Analyze**. Results show verdicts, evidence, and scam/AI signals.'
             )
-            if _show_url_section:
+            if st.session_state.selected_section == "fact_check":
                 _tip = (
-                    '👆 Paste text above, or use **Or analyze from URL** to fetch an article and fact-check it. '
+                    '👆 Paste text above, or **Or upload a document** (PDF/DOCX) to summarize and fact-check. '
+                    'Then click **Analyze**. Results show document summary, verdicts, evidence, and scam/AI signals.'
+                )
+            elif _show_url_section:
+                _tip = (
+                    '👆 Paste text above, or use **Or analyze from URL** to fetch an article and analyze it. '
                     'Then click **Analyze**. Results show verdicts, evidence, and scam/AI signals.'
                 )
             st.markdown(
