@@ -1,7 +1,7 @@
 """
-Single BERT model for phishing detection and RAG embeddings.
-Replaces sentence-transformers: one model for both phishing classification and embedding.
-Uses ElSlay/BERT-Phishing-Email-Model (BERT-base fine-tuned for phishing; 0=Legitimate, 1=Phishing).
+BERT model for phishing detection only.
+Used by the Scam & Phishing section. RAG uses TF-IDF, not BERT.
+Uses ElSlay/BERT-Phishing-Email-Model (BERT-base fine-tuned; 0=Legitimate, 1=Phishing).
 """
 
 from typing import List, Optional, Tuple
@@ -14,6 +14,8 @@ _tokenizer = None
 _MODEL_ID = "ElSlay/BERT-Phishing-Email-Model"
 _EMBED_MAX_LENGTH = 128
 _PHISHING_MAX_LENGTH = 512
+# Shorter length for faster inference; 256 tokens is enough for most messages/URLs
+_PHISHING_MAX_LENGTH_FAST = 256
 
 
 def _get_model():
@@ -82,36 +84,68 @@ def predict_phishing(text: str, max_length: int = _PHISHING_MAX_LENGTH) -> Tuple
     Classify text as phishing or legitimate. Uses the full classification model.
     Returns (verdict, confidence) where verdict is "Supported" (phishing) or "Refuted" (legitimate).
     """
+    results = predict_phishing_batch([text], max_length=max_length)
+    return results[0] if results else ("Unknown", 0.0)
+
+
+def predict_phishing_batch(
+    texts: List[str],
+    max_length: int = _PHISHING_MAX_LENGTH_FAST,
+) -> List[Tuple[str, float]]:
+    """
+    Classify multiple texts in one forward pass. Much faster than calling predict_phishing in a loop.
+    Returns list of (verdict, confidence) in same order as texts. Empty/invalid texts get ("Unknown", 0.0).
+    """
     model, tokenizer = _get_model()
     if model is None or tokenizer is None:
-        return "Unknown", 0.0
+        return [("Unknown", 0.0)] * max(1, len(texts))
 
-    if not (text or "").strip():
-        return "Unknown", 0.0
+    # Normalize and filter empty; we'll reinsert Unknown for empty later
+    normalized = []
+    empty_indices: set = set()
+    for i, t in enumerate(texts):
+        s = (t or "").strip()
+        if not s:
+            empty_indices.add(i)
+        else:
+            normalized.append(s)
+
+    if not normalized:
+        return [("Unknown", 0.0)] * max(1, len(texts))
 
     try:
         import torch
 
         inputs = tokenizer(
-            text.strip(),
+            normalized,
             return_tensors="pt",
             truncation=True,
-            padding="max_length",
+            padding=True,
             max_length=max_length,
         )
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = model(**inputs)
             logits = outputs.logits
-            probs = torch.softmax(logits, dim=-1).cpu().numpy()[0]
+            probs = torch.softmax(logits, dim=-1).cpu().numpy()
         # Label 1 = Phishing, 0 = Legitimate (per model card)
-        phishing_prob = float(probs[1])
-        legit_prob = float(probs[0])
-        if phishing_prob >= 0.5:
-            return "Supported", phishing_prob  # Supported = scam/phishing
-        return "Refuted", legit_prob  # Refuted = legitimate
+        out_list: List[Tuple[str, float]] = []
+        idx = 0
+        for i in range(len(texts)):
+            if i in empty_indices:
+                out_list.append(("Unknown", 0.0))
+            else:
+                p = probs[idx]
+                phishing_prob = float(p[1])
+                legit_prob = float(p[0])
+                if phishing_prob >= 0.5:
+                    out_list.append(("Supported", phishing_prob))
+                else:
+                    out_list.append(("Refuted", legit_prob))
+                idx += 1
+        return out_list
     except Exception:
-        return "Unknown", 0.0
+        return [("Unknown", 0.0)] * max(1, len(texts))
 
 
 class EmbeddingWrapper:

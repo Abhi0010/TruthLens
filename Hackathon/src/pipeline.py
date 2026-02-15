@@ -195,10 +195,10 @@ def run_pipeline(
                         urls.append(u)
         return urls[:20]  # Limit to 20 citations
 
-    # 2. Claim verification — all sections use BERT/Backboard/DuckDuckGo (RAG fallback)
-    # Fact Check: Backboard → DuckDuckGo → RAG
-    # Normal News: DuckDuckGo → Backboard → RAG (Backboard synthesis applied if web succeeded)
-    # Scam/Phishing: BERT (message + URL phishing) → Backboard → DuckDuckGo → RAG
+    # 2. Claim verification
+    # Fact Check: Backboard → DuckDuckGo → RAG (TF-IDF)
+    # Normal News: DuckDuckGo → Backboard → RAG (TF-IDF)
+    # Scam/Phishing: BERT (message + URL phishing) → Backboard → DuckDuckGo → RAG (TF-IDF)
     verdicts: List[VerdictResult] = []
     # Use extracted claims or full text so we always try verification
     claims_to_verify = claims_raw if claims_raw else [result.raw_text[:2000]] if result.raw_text else []

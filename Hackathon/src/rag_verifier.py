@@ -1,14 +1,15 @@
-"""Local RAG verifier: chunking, embeddings, retrieval, verdict."""
+"""Local RAG verifier: chunking, TF-IDF retrieval, verdict.
+Uses TF-IDF for similarity (no BERT). BERT is used only for the phishing section."""
 
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from .utils import get_kb_path
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-# Use single BERT phishing model for RAG embeddings (replaces sentence-transformers)
-from .local_model import get_embedding_model as _get_embedding_model
+from .utils import get_kb_path
 
 
 # Contradiction keywords in KB chunks
@@ -69,27 +70,19 @@ def _load_kb(path: Optional[Path] = None) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-def _embed_chunks(chunks: List[str]) -> Optional[List[List[float]]]:
-    """Embed chunks using sentence-transformers if available."""
-    model = _get_embedding_model()
-    if model is None:
-        return None
+def _build_tfidf_index(chunks: List[str]) -> tuple:
+    """
+    Build TF-IDF index for chunks. Returns (vectorizer, chunk_matrix).
+    Lightweight, no BERT - used only for RAG fallback (Fact Check / Normal News).
+    """
+    if not chunks:
+        return None, None
     try:
-        return model.encode(chunks).tolist()
+        vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2), min_df=1)
+        chunk_matrix = vectorizer.fit_transform(chunks)
+        return vectorizer, chunk_matrix
     except Exception:
-        return None
-
-
-def _cosine_similarity(a: List[float], b: List[float]) -> float:
-    """Cosine similarity between two vectors."""
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = sum(x * x for x in a) ** 0.5
-    norm_b = sum(x * x for x in b) ** 0.5
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
+        return None, None
 
 
 def _has_contradiction(chunk: str) -> bool:
@@ -120,16 +113,17 @@ class VerdictResult:
 
 
 class RAGVerifier:
-    """Local RAG verifier with in-memory vector index."""
+    """Local RAG verifier with TF-IDF (no BERT). BERT is used only for phishing section."""
 
     def __init__(self, kb_path: Optional[Path] = None):
         self.kb_path = kb_path or get_kb_path()
         self.chunks: List[str] = []
-        self.embeddings: Optional[List[List[float]]] = None
+        self._vectorizer: Optional[TfidfVectorizer] = None
+        self._chunk_matrix = None  # sparse matrix from TfidfVectorizer
         self._indexed = False
 
     def _build_index(self) -> None:
-        """Load KB, chunk, and embed for similarity search."""
+        """Load KB, chunk, and build TF-IDF index for similarity search."""
         if self._indexed:
             return
         text = _load_kb(self.kb_path)
@@ -137,7 +131,7 @@ class RAGVerifier:
         if not self.chunks:
             self._indexed = True
             return
-        self.embeddings = _embed_chunks(self.chunks)
+        self._vectorizer, self._chunk_matrix = _build_tfidf_index(self.chunks)
         self._indexed = True
 
     def check_information(self, claim: str, top_k: int = 5) -> VerdictResult:
@@ -159,7 +153,7 @@ class RAGVerifier:
         Unknown: else
         """
         self._build_index()
-        if not self.chunks:
+        if not self.chunks or not self._vectorizer or self._chunk_matrix is None:
             return VerdictResult(
                 claim=claim,
                 verdict="Unknown",
@@ -167,18 +161,10 @@ class RAGVerifier:
                 similarity=0.0,
             )
 
-        # Get similarities via embeddings only
-        model = _get_embedding_model()
-        if not model or not self.embeddings:
-            return VerdictResult(
-                claim=claim,
-                verdict="Unknown",
-                evidence=[],
-                similarity=0.0,
-            )
         try:
-            q_emb = model.encode([claim])[0].tolist()
-            scores = [(i, _cosine_similarity(q_emb, e)) for i, e in enumerate(self.embeddings)]
+            q_vec = self._vectorizer.transform([claim])
+            sims = cosine_similarity(q_vec, self._chunk_matrix).ravel()
+            scores = [(i, float(sims[i])) for i in range(len(sims))]
         except Exception:
             return VerdictResult(
                 claim=claim,

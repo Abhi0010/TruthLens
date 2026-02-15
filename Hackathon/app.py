@@ -19,6 +19,7 @@ from src.pipeline import run_pipeline
 from src.rag_verifier import RAGVerifier
 from src.report_generator import generate_html_report
 from src.trainer_rounds import get_trainer_rounds
+from src.url_fetcher import fetch_and_extract
 
 
 @st.cache_resource
@@ -149,54 +150,44 @@ if "source_label" not in st.session_state:
 SAMPLE_INPUTS: dict[str, list[tuple[str, str]]] = {
     "Fact Check": [
         (
-            "BREAKING: They don't want you to know the truth! SHARE THIS NOW!!! "
-            "100% proven. Mainstream media is hiding what really happened. Tell everyone before it's too late.",
-            "Tweet",
+            "The Earth orbits the Sun. This was established by astronomers and is taught in science curricula worldwide.",
+            "True",
         ),
         (
-            "Scientists have FINALLY admitted that vaccines cause autism. The study was suppressed for years. "
-            "Share with every parent you know. Big Pharma doesn't want you to see this.",
-            "Social post",
+            "Water boils at 100 degrees Celsius (212 degrees Fahrenheit) at standard atmospheric pressure at sea level.",
+            "True",
         ),
         (
-            "The 1969 moon landing was faked in a Hollywood studio. NASA has never sent humans to the moon. "
-            "All the evidence points to a government cover-up. Do your own research.",
-            "Forum post",
+            "Paris is the capital of France. The French government and international references confirm this.",
+            "True",
         ),
         (
-            "According to the CDC, flu hospitalizations rose 15% this season compared to last year. "
-            "Health officials recommend getting the flu shot and washing hands frequently. The data was released in the agency's weekly FluView report.",
-            "News-style",
+            "Light travels at approximately 299,792 kilometers per second in a vacuum. This is a fundamental constant in physics.",
+            "True",
         ),
         (
-            "The election was stolen. Millions of fraudulent votes were counted. Everyone knows it. "
-            "We need to fight for our country before it's too late!!!",
-            "Tweet",
+            "The Pacific Ocean is the largest ocean on Earth by surface area. Geographic and oceanographic sources confirm this.",
+            "True",
         ),
         (
-            "A study from MIT found that moderate coffee consumption is associated with lower risk of heart disease. "
-            "Researchers followed 200,000 participants over 10 years. Results were published in the Journal of the American Medical Association in 2022.",
-            "News-style",
+            "The Great Wall of China is visible from the Moon. NASA and astronauts have confirmed this.",
+            "Fake",
         ),
         (
-            "Chemicals in the water supply are turning frogs into hermaphrodites. This is documented science. "
-            "The elite don't want you to know. Do your own research.",
-            "Social post",
+            "Humans only use 10% of their brains. The rest is unused potential that we could tap into.",
+            "Fake",
         ),
         (
-            "U.S. GDP grew 2.8% in the third quarter of 2024, according to the Bureau of Economic Analysis. "
-            "Unemployment held at 3.7%. Federal Reserve officials said they will monitor inflation data before the next rate decision.",
-            "News-style",
+            "Bats are blind. They rely entirely on echolocation and cannot see.",
+            "Fake",
         ),
         (
-            "COVID-19 was created in a Chinese lab and released on purpose. Dr. Fauci knew and funded it. It's all in the emails. "
-            "Wake up. They're coming for your freedom next.",
-            "Tweet",
+            "Christopher Columbus proved the Earth is round. Before his voyage, everyone believed the world was flat.",
+            "Fake",
         ),
         (
-            "The Springfield Food Bank reported a 20% increase in demand this winter. Volunteers are needed. "
-            "Donations can be dropped at 123 Main St. The organization has been serving the community since 1985, according to its annual report.",
-            "Community update",
+            "Vitamin C cures the common cold. Major health authorities recommend megadoses for cold prevention and cure.",
+            "Fake",
         ),
     ],
     "Phishing scams": [
@@ -249,6 +240,32 @@ SAMPLE_INPUTS: dict[str, list[tuple[str, str]]] = {
             "[Name] invited you to view a document: 'Q4 Budget.xlsx'. Open with one click: bit.ly/xxxxx. "
             "You may need to sign in with your Google or Microsoft account to view. Do not share this link.",
             "Document phishing",
+        ),
+        # Safe / legitimate messages (for demo: system should label Safe)
+        (
+            "Your order #8842 has shipped. Track your delivery at example.com/orders using the link in your account. "
+            "Estimated delivery: Thursday. No action needed. Questions? Contact us through the Help Center.",
+            "Safe – order confirmation",
+        ),
+        (
+            "Reminder: Team standup is Tuesday at 10:00 AM. Agenda and Zoom link are in your calendar invite. "
+            "Please join from your usual workspace. No reply required.",
+            "Safe – meeting reminder",
+        ),
+        (
+            "We've received your support request. Ticket #9012 is in progress. Our team typically responds within 24 business hours. "
+            "You can check status anytime at support.example.com. We will not ask for your password by email.",
+            "Safe – support acknowledgment",
+        ),
+        (
+            "Your statement is ready. Log in at your bank's official website or app (type the URL yourself) to view it. "
+            "We never ask for your password, PIN, or full SSN by email or phone. If you did not request this, ignore this message.",
+            "Safe – bank notice",
+        ),
+        (
+            "Thanks for subscribing to our newsletter. You'll get the next issue on Monday. Unsubscribe link is in the footer. "
+            "We're at 123 Main St, City, State. No payment or personal details requested.",
+            "Safe – newsletter",
         ),
     ],
     "Normal news": [
@@ -1111,7 +1128,56 @@ else:
             if st.button(_sample_label, key="sample_analyzer_current", use_container_width=True):
                 chosen = random.choice(SAMPLE_INPUTS[_sample_key])
                 st.session_state.input_text = chosen[0]
+                st.session_state.source_url = ""
+                st.session_state.source_label = ""
                 st.rerun()
+        # URL section for Fact Check and Normal News: fetch URL, extract text, run same pipeline
+        _show_url_section = st.session_state.selected_section in ("fact_check", "normal_news")
+        if _show_url_section:
+            with st.expander("🔗 Or analyze from URL", expanded=False):
+                st.caption("Enter a news or article URL to fetch and fact-check the same way as pasted text.")
+                url_input = st.text_input(
+                    "Article URL",
+                    placeholder="https://example.com/article...",
+                    key="analyzer_url_input",
+                    label_visibility="collapsed",
+                )
+                fetch_analyze_clicked = st.button("Fetch & Analyze", key="fetch_analyze_url")
+                if fetch_analyze_clicked and url_input and url_input.strip():
+                    url_to_fetch = url_input.strip()
+                    if not url_to_fetch.startswith(("http://", "https://")):
+                        url_to_fetch = "https://" + url_to_fetch
+                    with st.spinner("Fetching URL and extracting text..."):
+                        try:
+                            text, title = fetch_and_extract(url_to_fetch)
+                            if not text or len(text) < 30:
+                                st.error("Could not extract enough text from this URL. Try pasting the article text instead.")
+                            else:
+                                st.session_state.input_text = text
+                                st.session_state.source_url = url_to_fetch
+                                st.session_state.source_label = title or url_to_fetch
+                                content_type = st.session_state.get("selected_section", "fact_check")
+                                with st.status("Analyzing...", expanded=True) as status:
+                                    st.write("Extracting claims...")
+                                    if content_type == "fact_check":
+                                        st.write("Verifying claims with Backboard...")
+                                    elif content_type == "normal_news":
+                                        st.write("Searching the web (DuckDuckGo) for evidence...")
+                                        st.write("Sending results to Backboard for synthesis...")
+                                    st.write("Checking for manipulation & AI signals...")
+                                    with st.spinner("Analyzing..."):
+                                        result_dict = _run_analysis_in_thread(text, content_type)
+                                    st.write("Computing fact-check metrics...")
+                                    status.update(label="Done!", state="complete")
+                                result_dict["source_url"] = st.session_state.get("source_url", "")
+                                result_dict["source_label"] = st.session_state.get("source_label", "")
+                                result_dict["input_text"] = text
+                                st.session_state.last_result = result_dict
+                                st.session_state.last_input_hash = hash(text)
+                                st.success(f"Fetched: **{title[:80]}{'...' if len(title) > 80 else ''}**")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Could not fetch URL: {e}")
         user_input = st.text_area(
         "Paste text to analyze",
         height=200,
@@ -1126,6 +1192,9 @@ else:
             if not user_input or not user_input.strip():
                 st.warning("Please enter some text to analyze.")
             else:
+                # Pasted text: clear URL source so result is not attributed to a previous URL
+                st.session_state.source_url = ""
+                st.session_state.source_label = ""
                 input_hash = hash(user_input.strip())
                 content_type = st.session_state.get("selected_section", "fact_check")
                 with st.status("Analyzing...", expanded=True) as status:
@@ -1212,19 +1281,20 @@ else:
                 else:
                     st.write(f"**Fact check:** {result.get('fact_check_summary', 'No claims to verify')}")
                 st.write(f"**Confidence in response:** {result['response_confidence']*100:.0f}%")
-                _src_text = {"backboard": "Using Backboard", "web+backboard": "DuckDuckGo web search → Backboard synthesis", "web": "Using internet (DuckDuckGo web search)", "local_model": "BERT (message + URL phishing, no API)"}
+                _src_text = {"backboard": "Using Backboard", "web+backboard": "DuckDuckGo web search → Backboard synthesis", "web": "Using internet (DuckDuckGo web search)", "local_model": "BERT (message + URL phishing)"}
                 st.write(f"**Fact checker source:** {_src_text.get(vmode) or 'No internet — local knowledge base only (results may be limited)'}")
-                st.write("**Top reasons:**")
-                # Build reasons from claims so each line includes the claim text
-                claims_list = result.get("claims", [])
-                if claims_list:
-                    for c in claims_list:
-                        label = "Correct (supported by evidence)" if c["verdict"] == "Supported" else "Not supported by evidence" if c["verdict"] == "Refuted" else "Unclear" if c["verdict"] == "Unknown" else c["verdict"]
-                        claim_preview = c["claim"][:100] + "..." if len(c["claim"]) > 100 else c["claim"]
-                        st.write(f'- **{label}:** "{claim_preview}"')
-                else:
-                    for r in result["top_reasons"]:
-                        st.write(f"- {r}")
+                if content_type != "scam_phishing":
+                    st.write("**Top reasons:**")
+                    # Build reasons from claims so each line includes the claim text
+                    claims_list = result.get("claims", [])
+                    if claims_list:
+                        for c in claims_list:
+                            label = "Correct (supported by evidence)" if c["verdict"] == "Supported" else "Not supported by evidence" if c["verdict"] == "Refuted" else "Unclear" if c["verdict"] == "Unknown" else c["verdict"]
+                            claim_preview = c["claim"][:100] + "..." if len(c["claim"]) > 100 else c["claim"]
+                            st.write(f'- **{label}:** {claim_preview}')
+                    else:
+                        for r in result["top_reasons"]:
+                            st.write(f"- {r}")
                 citations = result.get("citations", [])
                 if citations:
                     st.write("**Citations:**")
@@ -1288,8 +1358,17 @@ else:
             )
             st.caption("Open the file in a browser and use Print → Save as PDF to get a PDF.")
         else:
+            _tip = (
+                '👆 Paste text above (or use **Or analyze from URL** for Fact Check / Normal news), '
+                'then click **Analyze**. Results show verdicts, evidence, and scam/AI signals.'
+            )
+            if _show_url_section:
+                _tip = (
+                    '👆 Paste text above, or use **Or analyze from URL** to fetch an article and fact-check it. '
+                    'Then click **Analyze**. Results show verdicts, evidence, and scam/AI signals.'
+                )
             st.markdown(
-                '<div class="analyzer-tip-box">👆 Paste text above (or use **Try a sample** to load an example), then click **Analyze**. Results show verdicts, evidence, and scam/AI signals.</div>',
+                f'<div class="analyzer-tip-box">{_tip}</div>',
                 unsafe_allow_html=True,
             )
 

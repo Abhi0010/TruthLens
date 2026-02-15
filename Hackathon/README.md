@@ -25,7 +25,7 @@ Or simply `streamlit run app.py` (you may be prompted for email—leave blank to
 
 The app will open in your browser at `http://localhost:8501`.
 
-**Note:** The first run may take 1–2 minutes while the BERT model (phishing + optional RAG embeddings) downloads. Subsequent runs are faster.
+**Note:** The first run in Scam & Phishing may take 1–2 minutes while the BERT model downloads. Fact Check and Normal News use TF-IDF for RAG (no BERT).
 
 ### Optional: API keys (.env)
 
@@ -90,7 +90,7 @@ Use the sidebar buttons to load examples:
     ├── rag_verifier.py    # Local RAG (fallback)
     ├── backboard_client.py   # Backboard API (fact-check assistant)
     ├── backboard_verifier.py  # Claim verification via Backboard
-    ├── local_model.py        # BERT phishing + RAG embeddings
+    ├── local_model.py        # BERT phishing only
     ├── phishing_verifier.py  # Message + URL phishing via BERT
     ├── scoring.py
     ├── utils.py
