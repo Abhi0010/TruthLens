@@ -16,6 +16,7 @@ import streamlit as st
 
 from src.pipeline import run_pipeline
 from src.rag_verifier import RAGVerifier
+from src.report_generator import generate_html_report
 from src.trainer_rounds import get_trainer_rounds
 
 
@@ -123,6 +124,10 @@ if "reveal" not in st.session_state:
     st.session_state.reveal = False
 if "history" not in st.session_state:
     st.session_state.history = []
+if "source_url" not in st.session_state:
+    st.session_state.source_url = ""
+if "source_label" not in st.session_state:
+    st.session_state.source_label = ""
 
 SAMPLE_INPUTS = {
     "Fact Check": (
@@ -986,11 +991,21 @@ else:
                     result_dict = run_analysis(user_input.strip(), content_type)
                     st.write("Computing fact-check metrics...")
                     status.update(label="Done!", state="complete")
+                result_dict["source_url"] = st.session_state.get("source_url", "")
+                result_dict["source_label"] = st.session_state.get("source_label", "")
+                result_dict["input_text"] = user_input.strip()
                 st.session_state.last_result = result_dict
                 st.session_state.last_input_hash = input_hash
                 st.rerun()
         if st.session_state.last_result is not None:
             result = st.session_state.last_result
+            source_label = result.get("source_label", "") or st.session_state.get("source_label", "")
+            source_url = result.get("source_url", "") or st.session_state.get("source_url", "")
+            if source_label or source_url:
+                if source_url and source_url.startswith("http"):
+                    st.caption(f"**Analyzed from:** [{source_label or source_url}]({source_url})")
+                else:
+                    st.caption(f"**Analyzed from:** {source_label}")
             vmode = result.get("verification_mode", "offline")
             if vmode == "backboard":
                 mode_badge = '<span class="backboard-badge">BACKBOARD</span>'
@@ -1103,6 +1118,22 @@ else:
                     st.write(f"- {f}")
                 st.write("**Safer approach:**")
                 st.info(result["social_engineering"]["safer_rewrite_suggestion"])
+            st.divider()
+            report_html = generate_html_report(
+                result,
+                source_url=result.get("source_url", ""),
+                source_label=result.get("source_label", ""),
+                input_text=result.get("input_text", ""),
+            )
+            st.download_button(
+                "Download report (HTML)",
+                data=report_html,
+                file_name="truthlens_report.html",
+                mime="text/html",
+                use_container_width=True,
+                key="download_report",
+            )
+            st.caption("Open the file in a browser and use Print → Save as PDF to get a PDF.")
         else:
             st.markdown(
                 '<div class="analyzer-tip-box">👆 Paste text above (or use **Try a sample** to load an example), then click **Analyze**. Results show verdicts, evidence, and scam/AI signals.</div>',
