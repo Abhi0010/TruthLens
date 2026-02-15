@@ -443,7 +443,8 @@ else:
                     st.write("Extracting claims...")
                     st.write("Searching the web (DuckDuckGo) for evidence...")
                     st.write("Checking for manipulation & AI signals...")
-                    result_dict = run_analysis(user_input.strip(), "Normal news")
+                    content_type = st.session_state.get("selected_section", "fact_check")
+                    result_dict = run_analysis(user_input.strip(), content_type)
                     st.write("Computing fact-check metrics...")
                     status.update(label="Done!", state="complete")
                 st.session_state.last_result = result_dict
@@ -473,8 +474,8 @@ else:
                     f'<div class="trust-card"><div>Confidence in response</div><div class="metric-big">{result["response_confidence"]*100:.0f}%</div></div>',
                     unsafe_allow_html=True,
                 )
-            tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                "📋 Quick Check", "✓ Claim Verify", "🛡️ Manipulation & Scam", "🤖 AI-Generated?", "📚 Evidence",
+            tab1, tab2, tab3 = st.tabs([
+                "📋 Quick Check", "📚 Evidence", "🛡️ Manipulation & Scam",
             ])
             with tab1:
                 st.subheader("Quick Check Summary")
@@ -486,9 +487,8 @@ else:
                     st.write(f"- {r}")
                 st.write("**Fact checker risk:**", f"{result['misinformation']['risk_score']*100:.0f}%")
                 st.write("**Social engineering risk:**", result["social_engineering"]["risk_level"])
-                st.write("**AI-generated likelihood:**", f"{result['ai_detection']['ai_likelihood']*100:.0f}%")
             with tab2:
-                st.subheader("Normal News")
+                st.subheader("Evidence")
                 if result["claims"]:
                     for c in result["claims"]:
                         verdict_class = f"verdict-{c['verdict'].lower()}"
@@ -520,36 +520,6 @@ else:
                     st.write(f"- {f}")
                 st.write("**Safer approach:**")
                 st.info(result["social_engineering"]["safer_rewrite_suggestion"])
-            with tab4:
-                st.subheader("AI-Generated Analysis")
-                st.write(f"**AI likelihood:** {result['ai_detection']['ai_likelihood']*100:.0f}%")
-                st.write("**Indicators:**")
-                for i in result["ai_detection"]["indicators"]:
-                    st.write(f"- {i}")
-            with tab5:
-                st.subheader("Retrieved Evidence")
-                st.caption("Sources from Backboard" if vmode == "backboard" else "Sources from DuckDuckGo web search" if vmode == "web" else "Sources from local knowledge base")
-                if result["evidence_passages"]:
-                    seen = set()
-                    for ep in result["evidence_passages"][:20]:
-                        key = (ep["claim"], ep["passage"][:50])
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        st.markdown(f"**Claim:** {ep['claim']}")
-                        v_label = "Correct" if ep["verdict"] == "Supported" else "Incorrect" if ep["verdict"] == "Refuted" else ep["verdict"]
-                        st.write(f"Confidence in claim: {ep['similarity']*100:.0f}% | Verdict: {v_label}")
-                        passage = ep["passage"]
-                        if passage.startswith("Source:") and ("http://" in passage or "https://" in passage):
-                            parts = passage.split("http", 1)
-                            label = parts[0].replace("Source:", "").strip()
-                            url = "http" + parts[1].strip()
-                            st.markdown(f"🔗 {label} — [{url}]({url})" if label else f"🔗 [{url}]({url})")
-                        else:
-                            st.write(passage if len(passage) <= 800 else passage[:800] + "...")
-                        st.divider()
-                else:
-                    st.info("No evidence passages retrieved.")
         else:
             st.info("👆 Paste text above and click **Analyze** to get started. Use the sidebar to load sample inputs.")
 

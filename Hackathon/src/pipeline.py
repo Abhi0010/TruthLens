@@ -13,7 +13,7 @@ from .social_engineering_detector import RiskLevel, SocialEngineeringResult, det
 from .utils import is_empty_input
 from .web_verifier import WebVerifier
 
-from .backboard_client import is_configured as backboard_configured
+from .backboard_client import is_configured as backboard_configured, synthesize_fact_check
 from .backboard_verifier import BackboardVerifier
 
 
@@ -61,10 +61,14 @@ def run_pipeline(
     # 1. Claim extraction
     claims_raw = extract_claims(text)
 
-    # 2. Claim verification — Backboard if configured, else DuckDuckGo, else RAG
+    # Normalize: treat claim_verification like fact_check (DuckDuckGo-first path)
+    is_phishing = content_type == "scam_phishing"
+    is_normal_or_fact_check = content_type in ("normal_news", "fact_check", "claim_verification") or content_type not in ("scam_phishing",)
+
+    # 2. Claim verification — Phishing: Backboard first then DuckDuckGo/RAG; Normal/Fact-check: DuckDuckGo first then Backboard/RAG
     verdicts: List[VerdictResult] = []
     if claims_raw:
-        if backboard_configured() and BackboardVerifier is not None:
+        if is_phishing and backboard_configured() and BackboardVerifier is not None:
             try:
                 backboard_verifier = BackboardVerifier()
                 verdicts = backboard_verifier.verify_claims(claims_raw)
@@ -80,10 +84,22 @@ def run_pipeline(
                     break
                 except Exception:
                     if attempt == 1:
-                        verifier = rag_verifier or RAGVerifier()
-                        verdicts = verifier.verify_claims(claims_raw)
-                        result.verification_mode = "offline"
+                        verdicts = []
                     continue
+        if not verdicts and backboard_configured() and BackboardVerifier is not None and is_normal_or_fact_check:
+            try:
+                backboard_verifier = BackboardVerifier()
+                verdicts = backboard_verifier.verify_claims(claims_raw)
+                result.verification_mode = "backboard"
+            except Exception:
+                pass
+        if not verdicts:
+            try:
+                verifier = rag_verifier or RAGVerifier()
+                verdicts = verifier.verify_claims(claims_raw)
+                result.verification_mode = "offline"
+            except Exception:
+                pass
 
     # Convert to ClaimVerdict for scoring
     result.claims = [
@@ -106,6 +122,23 @@ def run_pipeline(
                 "verdict": v.verdict,
             })
 
+    # 2b. For normal/fact-check when web succeeded, one Backboard synthesis (summary + reasons)
+    synthesis_result: Optional[Dict[str, Any]] = None
+    if (
+        verdicts
+        and result.verification_mode == "web"
+        and is_normal_or_fact_check
+        and backboard_configured()
+    ):
+        try:
+            payload = [
+                {"claim": v.claim, "verdict": v.verdict, "evidence": v.evidence}
+                for v in verdicts
+            ]
+            synthesis_result = synthesize_fact_check(payload)
+        except Exception:
+            pass
+
     # 3. Misinformation detector
     result.misinformation = detect_misinformation(text)
 
@@ -119,5 +152,11 @@ def run_pipeline(
     result.correct_count, result.incorrect_count, result.response_confidence, result.top_reasons, result.fact_check_summary = compute_fact_check_metrics(
         claim_verdicts=result.claims,
     )
+    # Overwrite summary and reasons with Backboard synthesis when available
+    if synthesis_result:
+        if synthesis_result.get("fact_check_summary"):
+            result.fact_check_summary = synthesis_result["fact_check_summary"]
+        if synthesis_result.get("top_reasons"):
+            result.top_reasons = synthesis_result["top_reasons"]
 
     return result
